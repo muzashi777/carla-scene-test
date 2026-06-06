@@ -1,26 +1,54 @@
 # -*- coding: utf-8 -*-
 """
-เครื่องรันเคสเดียว — ผูกทุกโมดูลเข้าด้วยกัน คืน RunRecord
-ใช้ร่วมกันทั้ง run_single.py (ส่ง viz เข้ามา = มีภาพ) และ run_matrix.py (viz=None = headless)
-ระยะ/ความเร็วสัมพัทธ์ที่ป้อนสมองกลเป็น ground-truth จาก CARLA (ตามที่เลือกไว้)
-หน่วงเฟรมหน่วงเฉพาะ 'การตรวจเจอ' (detected) เลียน perception latency ตามต้นแบบ
+เครื่องรันเคสเดียวของฉาก lead-brake — ผูกทุกโมดูลเข้าด้วยกัน คืน LeadBrakeRecord
+ใช้ร่วมกันทั้ง run_single_lead.py (ส่ง viz = มีภาพ) และ run_matrix_lead.py (viz=None = headless)
+แยกขาดจาก core/runner.py (ฉาก cut-in) เพื่อความง่ายในการทดสอบ/ดีบักทีละฉาก
+ต่างจาก runner.py ตรง: รถนำ (lead) จอดข้างหน้าในเลนเดียวกัน + ระยะผิวถึงผิวเป็นแบบท้ายชนหน้า
 """
 import queue
 import math
 from collections import deque
+from dataclasses import dataclass, asdict  # noqa: F401  (asdict ใช้ผ่าน metrics.write_csv)
 
 import carla
 
 from core import actors
-from core.scenario_cutin import CutInScenario
+from core.scenario_lead_brake import LeadBrakeScenario
 from core.types import Perception, EgoState
-from core.metrics import RunRecord, MfddTracker
-from core.conflict import cutin_is_conflict
+from core.metrics import MfddTracker
+from core.conflict import lead_brake_is_conflict
 from control.base_controller import make_controller
 # import เพื่อให้ register() ทำงาน (ขึ้นทะเบียนชื่อ controller)
 import control.baseline_static_ttc   # noqa: F401
 import control.proposed_dynamic_ttc  # noqa: F401
 import control.proposed_enhanced     # noqa: F401
+
+
+@dataclass
+class LeadBrakeRecord:
+    """RunRecord เฉพาะฉาก lead-brake — ชื่อฟิลด์เมตริกตรงกับที่ metrics.summarize/write_csv ใช้"""
+    label: str
+    controller: str
+    delay_frames: int
+    ego_speed_kmh: float
+    lead_speed_kmh: float          # ความเร็วรถนำก่อนเบรก (km/h)
+    mu: float
+    headway_thw: float             # ระยะห่างเป็นเวลา THW (s) — 0 ถ้าใช้โหมดระยะคงที่
+    headway_d: float               # ระยะห่างรถนำ-ego ตอนเริ่ม "เมตรจริง" (คำนวณจาก THW×speed หรือค่าคงที่)
+    avoided: bool = False
+    collision_with: str = ""
+    s_clearance: float = 0.0       # m (>0 = ระยะผิวถึงผิวเมื่อหยุดสนิท; 0 = ชน)
+    a_b_mfdd: float = 0.0          # m/s²
+    t_c_warn: float = 0.0          # s (TTC ตอนเริ่มเบรก)
+    dv_speed_var: float = 0.0      # km/h
+    collision_speed_kmh: float = 0.0
+    peak_decel: float = 0.0        # m/s²
+    brake_distance: float = 0.0    # m
+    min_dist: float = 0.0
+    a_req_at_brake: float = 0.0    # m/s² ความหน่วงที่ "จำเป็น" ตอนเริ่มเบรก (ดูว่าใกล้ขีด μ·g แค่ไหน)
+    a_max: float = 0.0             # m/s² เพดานความหน่วง = μ·g ของเคสนี้
+    is_conflict: bool = True       # True = ego ชน (kinematic, no-brake) — ดู core/conflict.py
+    result_txt: str = ""
 
 
 def run_case(sess, cfg, case, controller_name, delay_frames, detector, viz=None):
@@ -30,15 +58,29 @@ def run_case(sess, cfg, case, controller_name, delay_frames, detector, viz=None)
     top_q = queue.Queue()
     collision = {"hit": False, "with": None}
 
-    label = f"{controller_name}"
+    # ── ระยะห่างรถนำ: THW (วินาที) → เมตรจริง  หรือ  ระยะคงที่ (โหมดเดิม) ──
+    # THW อิงความเร็ว "ego" เสมอ (เราเป็นคนตามรถนำ) แม้เปิด lead_speed ต่างจาก ego
+    ego_ms = case["ego_speed_kmh"] / 3.6
+    if getattr(cfg, "USE_THW", False):
+        headway_thw = case["headway_thw"]
+        headway_d = ego_ms * headway_thw          # THW → เมตรจริง
+    else:
+        headway_thw = 0.0
+        headway_d = case["headway_d"]             # ระยะคงที่ (พฤติกรรมเดิม)
+    if headway_d > cfg.INPATH_MAX_RANGE:
+        print(f"[WARN] headway_d={headway_d:.1f}m > INPATH_MAX_RANGE={cfg.INPATH_MAX_RANGE}m "
+              f"— เกตตรวจจับ ground-truth อาจไม่เห็นรถนำตอนเริ่ม")
+
     # ── ตรวจสอบ conflict-case (kinematic, ไม่ต้องเปิดซิม) ──
-    # เคสนี้เป็น conflict ถ้า ego ที่ไม่เบรกเลยจะชน dart ภายใน MAX_TICKS×FIXED_DT วินาที
-    # ทุกเคสใน cut-in matrix เป็น conflict (ดูการพิสูจน์ใน core/conflict.py)
-    is_conflict = cutin_is_conflict(case, cfg)
-    rec = RunRecord(
-        label=label, controller=controller_name, delay_frames=delay_frames,
-        ego_speed_kmh=case["ego_speed_kmh"], mu=case["mu"],
-        trigger_d=case["trigger_d"], dart_speed_kmh=case["dart_speed_kmh"],
+    # เคสนี้เป็น conflict ถ้า ego ที่ไม่เบรกเลยจะชนรถนำภายใน MAX_TICKS×FIXED_DT วินาที
+    # คำนวณก่อนสร้าง rec เพื่อให้บันทึกลง CSV ได้แม้ spawn ล้มเหลว (ดู core/conflict.py)
+    _case_for_conflict = {**case, "headway_d": headway_d}
+    is_conflict = lead_brake_is_conflict(_case_for_conflict, cfg)
+
+    rec = LeadBrakeRecord(
+        label=controller_name, controller=controller_name, delay_frames=delay_frames,
+        ego_speed_kmh=case["ego_speed_kmh"], lead_speed_kmh=case["lead_speed_kmh"],
+        mu=case["mu"], headway_thw=headway_thw, headway_d=headway_d,
         is_conflict=is_conflict,
     )
 
@@ -51,12 +93,15 @@ def run_case(sess, cfg, case, controller_name, delay_frames, detector, viz=None)
         ego.apply_control(carla.VehicleControl(brake=1.0, hand_brake=True))
         actors.set_friction(ego, case["mu"])
 
-        # ── DART ──
-        dart = actors.spawn_vehicle(world, **cfg.DART_SPAWN)
-        if not dart:
-            rec.result_txt = "DART spawn failed"; return rec, None
-        actor_list.append(dart)
-        dart.apply_control(carla.VehicleControl(brake=1.0, hand_brake=True))
+        # ── LEAD (จอดข้างหน้า ego ในเลนเดียวกัน; y = ego.y − headway_d เพราะ ego วิ่งไป -Y) ──
+        lead_y = cfg.EGO_SPAWN["y"] - headway_d
+        lead = actors.spawn_vehicle(
+            world, x=cfg.LEAD_SPAWN["x"], y=lead_y, z=cfg.LEAD_SPAWN["z"],
+            yaw=cfg.LEAD_SPAWN["yaw"], model=cfg.LEAD_SPAWN["model"])
+        if not lead:
+            rec.result_txt = "LEAD spawn failed"; return rec, None
+        actor_list.append(lead)
+        lead.apply_control(carla.VehicleControl(brake=1.0, hand_brake=True))
 
         # ── กล้องหน้า (ให้ YOLO) ──
         cam = actors.attach_rgb_camera(world, ego, cfg.CAM_FRONT_TF,
@@ -90,30 +135,28 @@ def run_case(sess, cfg, case, controller_name, delay_frames, detector, viz=None)
         # ── เตรียมสมองกล + ฉาก ──
         controller = make_controller(controller_name, cfg)
         controller.reset()
-        scen = CutInScenario(ego, dart, cfg, case)
+        scen = LeadBrakeScenario(ego, lead, cfg, case)
         scen.start()
-        ego_ms = actors.kmh_to_ms(case["ego_speed_kmh"])
 
         det_buffer = deque(maxlen=delay_frames + 1)
         mfdd = MfddTracker(case["ego_speed_kmh"])
         ego_y0 = ego.get_location().y
 
         # ── ระยะ "ผิวถึงผิว" = ระยะศูนย์กลาง − ขนาดตัวรถ ──
-        # dist2d เป็นระยะจุดศูนย์กลาง การชนจริงเกิดเมื่อกันชนแตะ (gap≈0)
-        # dart พุ่งมาขวางตั้งฉาก → ด้านที่หันเข้า ego คือด้านข้าง (extent.y)
+        # ฉากนี้ท้ายชนหน้า รถสองคันหันทางเดียวกัน → หักครึ่งความยาวทั้งสองคัน (extent.x)
         if cfg.AUTO_GAP_OFFSET:
             try:
-                gap_offset = ego.bounding_box.extent.x + dart.bounding_box.extent.y
+                gap_offset = ego.bounding_box.extent.x + lead.bounding_box.extent.x
             except Exception:
                 gap_offset = cfg.GAP_OFFSET
         else:
             gap_offset = cfg.GAP_OFFSET
-        print(f"[GAP] gap_offset = {gap_offset:.2f} m (หักขนาดตัวรถออกจากระยะศูนย์กลาง)")
+        print(f"[GAP] gap_offset = {gap_offset:.2f} m (หักครึ่งความยาว ego + lead ออกจากระยะศูนย์กลาง)")
 
         def surface_gap(dc):
             return max(0.0, dc - gap_offset)
 
-        prev_gap = surface_gap(actors.dist2d(ego, dart))
+        prev_gap = surface_gap(actors.dist2d(ego, lead))
 
         brake_engaged = False
         brake_info = None        # (tick, gap, v_kmh, ego_y, ttc)
@@ -127,11 +170,9 @@ def run_case(sess, cfg, case, controller_name, delay_frames, detector, viz=None)
         last_frame = None
         quit_flag = False
 
-        # ── ประมาณความเร็ว/ความหน่วงของ dart จากการเคลื่อนที่จริง (รีเซ็ตทุกเคส) ──
-        # ใช้ป้อนสมองกล proposed_enhanced (required-decel) — แชร์เท่ากันทุกสมองกล
-        # ใช้ความเร็ว 'ตามแนวการวิ่งของ ego' (longitudinal): dart พุ่งตัดข้าง → ส่วนนี้ ≈ 0
-        #   → required_decel มอง dart เป็นสิ่งกีดขวางนิ่ง (a_req=v_e²/2·gap) แทนที่จะคิดว่ามันวิ่งหนีไปข้างหน้า
-        prev_lead_ms = actors.long_speed_along(ego, dart)
+        # ── ประมาณความเร็ว/ความหน่วงรถข้างหน้าจากการเคลื่อนที่จริง (รีเซ็ตทุกเคส) ──
+        # ไม่อ่าน LEAD_DECEL จาก config ตรง ๆ — ประมาณจาก finite-difference + EMA ให้สมจริง/ทำซ้ำได้
+        prev_lead_ms = actors.speed_ms(lead)
         lead_decel_ema = 0.0
         rec.a_max = case["mu"] * cfg.GRAVITY     # เพดานความหน่วง μ·g (คงที่ทั้งเคส)
 
@@ -149,30 +190,27 @@ def run_case(sess, cfg, case, controller_name, delay_frames, detector, viz=None)
 
             ego_y = ego.get_location().y
             v_kmh = actors.speed_kmh(ego)
-            d = actors.dist2d(ego, dart)
+            d = actors.dist2d(ego, lead)
             gap = surface_gap(d)
             min_dist = min(min_dist, d)
             min_gap = min(min_gap, gap)
 
             # ── เช็กชน 'ทันที' หลังอ่านสถานะ (ก่อนเสีย YOLO/วาดภาพ) ──
-            # ทำให้ break ไว และเฟรมที่ค้างไว้ = เฟรมตอนชนจริง
             if collision["hit"]:
                 result_txt = f"COLLISION with {collision['with']}"
                 rec.collision_with = collision["with"]
                 rec.collision_speed_kmh = v_kmh
 
-            scen.update()   # คุม dart (trigger/จอดขวาง)
+            scen.update()   # ตรึง lead ให้จอดนิ่ง
 
             # ── PERCEPTION ──
-            # YOLO: วาดบนจอเสมอ (ดีบัก/สมจริง)
             frame = detector.carla_image_to_bgr(img)
             yolo_now, in_band, box_h = detector.detect(frame)
-            # ground-truth: dart อยู่/กำลังเข้าทางเดินข้างหน้า ego ไหม (predictive)
+            # ground-truth: lead อยู่ในทางเดินข้างหน้า ego ไหม (lead นิ่ง → ไม่ต้อง predict)
             gt_now, lon, lat = actors.inpath_hazard(
-                ego, dart, cfg.INPATH_MAX_RANGE, cfg.INPATH_HALF_WIDTH,
+                ego, lead, cfg.INPATH_MAX_RANGE, cfg.INPATH_HALF_WIDTH,
                 cfg.INPATH_LOOKAHEAD if cfg.INPATH_PREDICT else 0.0)
 
-            # เลือกเกตที่ใช้ตัดสินใจเบรกตาม DETECTION_SOURCE
             src = cfg.DETECTION_SOURCE
             if src == "yolo":
                 detected_now = yolo_now
@@ -186,9 +224,8 @@ def run_case(sess, cfg, case, controller_name, delay_frames, detector, viz=None)
             prev_gap = gap
             ttc = (gap / rel_speed) if rel_speed > 1e-3 else math.inf
 
-            # ── ความเร็ว/ความหน่วงของ dart (ground-truth, ตามแนวการวิ่งของ ego) ──
-            # longitudinal: dart พุ่งตัดข้างมีส่วนนี้ ≈ 0 → ถูกมองเป็นสิ่งกีดขวางนิ่งใน required_decel
-            lead_ms = actors.long_speed_along(ego, dart)
+            # ── ความเร็ว/ความหน่วงรถข้างหน้า (ground-truth, ประมาณจากการเคลื่อนที่จริง) ──
+            lead_ms = actors.speed_ms(lead)
             raw_lead_decel = max(0.0, (prev_lead_ms - lead_ms) / cfg.FIXED_DT)
             prev_lead_ms = lead_ms
             lead_decel_ema = 0.3 * raw_lead_decel + 0.7 * lead_decel_ema   # EMA ลด noise
@@ -225,7 +262,6 @@ def run_case(sess, cfg, case, controller_name, delay_frames, detector, viz=None)
                     ego.apply_control(ctrl)
             elif not brake_engaged:
                 scen.cruise_ego()   # รักษาความเร็ว (เฉพาะตอนยังไม่เริ่มเบรก)
-            # ถ้า engaged แล้วแต่ controller ไม่สั่งเบรก (ไม่ควรเกิดเพราะ latch) → ปล่อยไหล ไม่รีเซ็ตความเร็ว
 
             # ── ติดตาม MFDD + ความหน่วงทันที/สูงสุด ──
             v_ms = actors.speed_ms(ego)
@@ -247,7 +283,7 @@ def run_case(sess, cfg, case, controller_name, delay_frames, detector, viz=None)
             if viz is not None:
                 ov = [f"{controller_name} delay={delay_frames}f | v {v_kmh:.0f} | gap {gap:.1f}m ttc {ttc:.2f}",
                       f"{'BRAKE!' if brake_engaged else 'cruising'} | det[{src}]: {perceived} (lon {lon:.1f} lat {lat:.1f})"]
-                hazard = {"camera": cam, "actor": dart, "in_path": gt_now,
+                hazard = {"camera": cam, "actor": lead, "in_path": gt_now,
                           "engaged": brake_engaged, "lon": lon, "lat": lat, "ttc": ttc}
                 last_frame, q = viz.frame(frame, detector.last_results, ov, img_top, hazard)
                 if q:
@@ -278,14 +314,14 @@ def run_case(sess, cfg, case, controller_name, delay_frames, detector, viz=None)
         rec.peak_decel = peak_decel
         if brake_info:
             rec.t_c_warn = 0.0 if math.isinf(brake_info[4]) else brake_info[4]
-            v_at_brake = brake_info[2]
-        else:
-            v_at_brake = case["ego_speed_kmh"]
         rec.dv_speed_var = case["ego_speed_kmh"] - rec.collision_speed_kmh
 
         print("=" * 60)
+        hw_txt = (f"THW={headway_thw:.1f}s→{headway_d:.1f}m" if getattr(cfg, "USE_THW", False)
+                  else f"headway={headway_d:.0f}m")
         print(f"RESULT [{controller_name} delay={delay_frames}f "
-              f"v={case['ego_speed_kmh']:.0f} mu={case['mu']} Δd={case['trigger_d']:.0f}] : {result_txt}")
+              f"v={case['ego_speed_kmh']:.0f} vlead={case['lead_speed_kmh']:.0f} "
+              f"mu={case['mu']} {hw_txt}] : {result_txt}")
         if brake_info:
             print(f"  เริ่มเบรก tick={brake_info[0]} gap={brake_info[1]:.1f}m "
                   f"v={brake_info[2]:.1f} ttc={rec.t_c_warn:.2f}s")

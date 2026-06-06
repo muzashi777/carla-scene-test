@@ -49,6 +49,40 @@ LANE_RIGHT = 760
 # กล่องต้องสูงอย่างน้อยเท่านี้ถึงนับว่า "ตรวจเจอใกล้พอ" (กันทริกตอน dart ยังไกล)
 MIN_BOX_H  = 90
 
+# ── แหล่งเกตตรวจจับ (ใช้ตัดสินว่า 'มีอันตรายในเส้นทาง' เพื่อให้สมองกลเบรก) ──
+#   "groundtruth" = ใช้ตำแหน่งจริงจาก CARLA ว่า dart อยู่ในเส้นทางข้างหน้าไหม (เชื่อถือได้)
+#   "yolo"        = ใช้แถบพิกเซลกลางภาพ + ความสูงกล่อง (เปราะกับเรขาคณิต cut-in)
+#   "both_or"     = จริงเมื่อ ground-truth หรือ YOLO อย่างใดอย่างหนึ่งจริง
+# แนะนำ "groundtruth" เพราะ dart พุ่งเข้าจากด้านข้าง มักหลุดแถบกลางภาพจนชน
+# YOLO ยังถูกวาดบนจอเสมอเพื่อความสมจริง/ดีบัก ไม่ว่าเลือกอันไหน
+DETECTION_SOURCE = "groundtruth"
+
+# ทางเดิน (corridor) ของ ego สำหรับเกต ground-truth — วัดในกรอบพิกัด ego
+INPATH_HALF_WIDTH = 1.8    # ครึ่งความกว้างเลน (m) — |ระยะข้าง| ≤ ค่านี้ = อยู่ในเลน
+INPATH_MAX_RANGE  = 40.0   # มองไปข้างหน้าไกลสุด (m)
+
+# ── predictive corridor (เห็น dart ตั้งแต่ "กำลังเข้าเลน" ไม่รอจนเข้าเต็มตัว) ──
+# ใช้ความเร็วด้านข้างของ dart ทำนายว่าจะเข้า corridor ภายใน lookahead วินาทีไหม
+# ทำให้ทั้ง baseline/proposed มี detection lead พอ → dynamic TTC ของ proposed ได้ทำงาน
+INPATH_PREDICT   = True
+INPATH_LOOKAHEAD = 1.5     # วินาที มองล่วงหน้าว่า dart จะเข้าเลนไหม
+
+# ── การจับคู่เฟรมกล้องกับ snapshot โลก (กันภาพดริฟต์ใน sync mode) ──
+FRAME_SYNC = True          # True = อ่านภาพจนกว่า frame id ตรงกับ world.tick()
+
+# ── ระยะผิวถึงผิว (surface gap) ──
+# dist2d เป็นระยะจุดศูนย์กลาง รถยาวคันละ ~4.5 ม. การชนเกิดเมื่อกันชนแตะ
+# จึงหักขนาดตัวรถออกก่อนคำนวณ TTC/clearance ไม่งั้นสมองกลเบรกช้าไป ~2 ม.
+AUTO_GAP_OFFSET = True     # True = คำนวณจาก bounding box อัตโนมัติ (ego ยาว + dart กว้าง)
+GAP_OFFSET = 3.2           # ใช้ค่านี้เมื่อ AUTO_GAP_OFFSET=False (ม.)
+
+# ── โมเดลการเบรก ──
+#   "kinematic" = คุมความหน่วง = brake × μ × g ตรงๆ ผ่าน set_target_velocity
+#                 → μ เป็นตัวแปรทดสอบจริง ทำซ้ำได้ ตรงสูตร v²/2μg (แนะนำ)
+#   "physics"   = ส่ง apply_control(brake) ให้ tire model ของ CARLA จัดการ
+#                 (ใช้ได้ถ้า CARLA 0.9.x รับ tire_friction; 0.10/Chrono มักไม่รับ μ)
+BRAKE_MODEL = "kinematic"
+
 # ── ความลื่นถนน μ (ตั้งที่ tire_friction ของล้อ) ───────────────────
 MU_DRY = 0.85
 MU_WET = 0.40
@@ -68,19 +102,22 @@ SHOW_WINDOW = True                # โชว์หน้าต่าง OpenCV 
 
 # ══════════════════════════════════════════════════════════════════
 #  TEST MATRIX สำหรับ run_matrix.py (ไล่อัตโนมัติ ไม่มีภาพ)
-#  ตาม Master Plan สถานการณ์ cut-in = 4 speed × 2 μ × 4 Δd = 32 เคส/สมองกล
+#  ฉาก cut-in = 5 speed × 2 μ × 5 Δd = 50 เคส/สมองกล
 # ══════════════════════════════════════════════════════════════════
 MATRIX = dict(
-    ego_speed_kmh = [30.0, 40.0, 50.0, 60.0],
+    ego_speed_kmh = [20.0, 30.0, 40.0, 50.0, 60.0],   # 20 km/h = ความเร็วต่ำในเมือง/พื้นที่จอดรถ
     mu            = [MU_DRY, MU_WET],
-    trigger_d     = [10.0, 15.0, 20.0, 25.0],
-    dart_speed_kmh= [20.0],          # คงที่ก่อน (เพิ่มเป็น [20,40] ได้ถ้าอยากขยาย)
+    trigger_d     = [20.0, 25.0, 30.0, 35.0, 40.0],   # 40 m = ระยะตอบสนองยาวขึ้น (ขยาย domain)
+    dart_speed_kmh= [20.0],
 )
-# จะรันสมองกลคู่ไหนมาเทียบกัน + หน่วงเฟรมของแต่ละตัว
+# จะรันสมองกลไหนมาเทียบกัน + หน่วงเฟรมของแต่ละตัว
 # (สลับได้ 2 ทาง: เปลี่ยน controller หรือเปลี่ยน delay)
+#   default เทียบ 3 สมองกล (baseline, proposed, proposed_enhanced) บนเคสชุดเดียวกัน
+#   proposed_enhanced (required-decel) ลดรูปเป็นเคสสิ่งกีดขวางนิ่งในฉาก cut-in (v_l=0 → a_req=v_e²/2gap)
 MATRIX_RUNS = [
-    dict(label="baseline", controller="baseline", delay_frames=0),
-    dict(label="proposed", controller="proposed", delay_frames=0),
+    dict(label="baseline",          controller="baseline",          delay_frames=0),
+    dict(label="proposed",          controller="proposed",          delay_frames=0),
+    dict(label="proposed_enhanced", controller="proposed_enhanced", delay_frames=0),
 ]
 RESULTS_DIR = "results"
 
@@ -98,3 +135,9 @@ DYN_MU0     = 0.85        # μ ฐาน (แห้ง) ต่ำกว่าน
 DYN_K_SPEED = 1.2         # น้ำหนักผลของความเร็ว
 DYN_K_MU    = 1.5         # น้ำหนักผลของความลื่น
 PARTIAL_BRAKE = 0.4       # แรงเบรกช่วง partial
+
+# proposed_enhanced: required-deceleration (รู้ทั้ง μ และการเบรกของรถข้างหน้า)
+#   ฉาก cut-in: dart จอดขวาง v_l=0 → a_req = v_e²/2gap (เคสสิ่งกีดขวางนิ่ง) อัตโนมัติ
+#   เพิ่ม controller="proposed_enhanced" ใน MATRIX_RUNS ได้เพื่อเทียบ
+REQ_FULL_FRAC = 0.9       # urgency ≥ ค่านี้ → เบรกเต็ม (90% ของเพดาน μ·g)
+REQ_WARN_FRAC = 0.6       # urgency ≥ ค่านี้ → เบรกบางส่วน (PARTIAL_BRAKE)

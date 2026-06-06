@@ -1,0 +1,748 @@
+# Technical Documentation — AEB Test Harness
+
+Consolidated technical reference for the AEB CARLA simulation harness.  
+Target publication: **ICARCV 2026** — *"A Real-to-Simulation Workflow for AEB Controller Testing Using 3D Gaussian Splatting in CARLA"*
+
+---
+
+## Table of Contents
+
+1. [Scenario Details](#1-scenario-details)
+2. [Test Matrix Definition](#2-test-matrix-definition)
+3. [Conflict Case Definition (`is_conflict`)](#3-conflict-case-definition-is_conflict)
+4. [Per-Case Algorithm Pipeline](#4-per-case-algorithm-pipeline)
+5. [Controller Logic](#5-controller-logic)
+6. [CPEIM Metrics and Aggregation Rules](#6-cpeim-metrics-and-aggregation-rules)
+7. [CSV Schema](#7-csv-schema)
+8. [Pre-Run Checklist](#8-pre-run-checklist)
+9. [Brake Timing Parameters — Equation (1)](#9-brake-timing-parameters--equation-1)
+10. [YOLO Detection Table Verification (TABLE V)](#10-yolo-detection-table-verification-table-v)
+11. [Pre-Submission Code Review Notes (ICARCV 2026)](#11-pre-submission-code-review-notes-icarcv-2026)
+12. [Code Revision History](#12-code-revision-history)
+
+---
+
+## 1. Scenario Details
+
+### Scenario 1 — Cut-in / Dart-out
+
+**Files:** `core/scenario_cutin.py` + `core/runner.py`
+
+Ego drives straight in the ego lane. A dart vehicle is parked to the side. When the longitudinal distance between ego and dart reaches `trigger_d`, the dart launches laterally across the lane at `dart_speed_kmh` and stops, blocking the path.
+
+- **Surface gap formula:** `gap_offset = ego.extent.x + dart.extent.y` (front-of-ego to side-of-dart)
+- **Predictive corridor:** `INPATH_PREDICT = True`; dart is detected as soon as its predicted lateral position intersects the ego corridor within `INPATH_LOOKAHEAD = 1.5 s`
+- **Dart stop x:** `DART_STOP_X = 3.5` (world x, lane centre)
+
+### Scenario 2 — Lead-brake (CCRb)
+
+**Files:** `core/scenario_lead_brake.py` + `core/runner_lead_brake.py`
+
+A lead vehicle spawns ahead of ego in the same lane, heading the same direction, initially matching ego's speed (`LEAD_SAME_AS_EGO = True`). After travelling `LEAD_BRAKE_AFTER_M = 8.0 m`, the lead vehicle brakes at constant deceleration `LEAD_DECEL` until stopped.
+
+- **Surface gap formula:** `gap_offset = ego.extent.x + lead.extent.x` (rear-end collision geometry)
+- **Predictive corridor:** `INPATH_PREDICT = False`; lead is detected immediately (already in lane), TTC ≈ ∞ while both vehicles travel at equal speed
+- **LEAD_DECEL override:** `LEAD_DECEL=6.0 python run_matrix_lead.py` (Euro-NCAP CCRb §3.4 standard)
+
+---
+
+## 2. Test Matrix Definition
+
+### Cut-in Matrix (50 cases/controller)
+
+| Variable | Values |
+|---|---|
+| `ego_speed_kmh` | 20, 30, 40, 50, 60 km/h |
+| `trigger_d` (Δd) | 20, 25, 30, 35, 40 m |
+| `mu` | 0.85 (dry), 0.40 (wet) |
+| `dart_speed_kmh` | 20 km/h (fixed) |
+
+Formula: 5 × 5 × 2 × 1 = **50 cases**. Total with 3 controllers: **150 runs**.
+
+**Domain justification:**
+- **20 km/h** — low-speed urban / parking lot scenarios where AEB is still required
+- **40 m trigger distance** — longer reaction horizon; tests improved performance with early hazard detection (longitudinal distance at trigger ≈ 38.5 m < `INPATH_MAX_RANGE = 40 m`, ground-truth detection works correctly)
+
+### Lead-brake Matrix (50 cases/controller)
+
+| Variable | Values |
+|---|---|
+| `ego_speed_kmh` | 20, 30, 40, 50, 60 km/h |
+| `HEADWAY_THW` | 1.0, 1.5, 2.0, 2.5, 3.0 s |
+| `mu` | 0.85 (dry), 0.40 (wet) |
+
+Formula: 5 × 5 × 2 = **50 cases**. Total with 3 controllers: **150 runs**.
+
+**Domain justification:**
+- **THW = 3.0 s** — cautious following distance per highway code / ISO 15622; extends domain toward easy side
+
+**THW → Actual Headway Distance (m):**
+
+| Speed | 1.0 s | 1.5 s | 2.0 s | 2.5 s | 3.0 s |
+|---|---|---|---|---|---|
+| **20 km/h** | 5.6 m | 8.3 m | 11.1 m | 13.9 m | 16.7 m |
+| 30 km/h | 8.3 m | 12.5 m | 16.7 m | 20.8 m | 25.0 m |
+| 40 km/h | 11.1 m | 16.7 m | 22.2 m | 27.8 m | 33.3 m |
+| 50 km/h | 13.9 m | 20.8 m | 27.8 m | 34.7 m | 41.7 m |
+| 60 km/h | 16.7 m | 25.0 m | 33.3 m | 41.7 m | 50.0 m |
+
+---
+
+## 3. Conflict Case Definition (`is_conflict`)
+
+**Definition (both scenarios):** A case is a *conflict case* if an ego that never brakes (constant speed throughout) would collide with the obstacle within `MAX_TICKS × FIXED_DT` seconds (= 20 s).
+
+**Properties:**
+- Computed **before simulation** from kinematics only — no extra CARLA runs
+- **Identical for all three controllers** — not controller-dependent, not post-hoc
+- Stored as the `is_conflict` column in every CSV row
+
+**Code:** `core/conflict.py` (derivation proof in file)
+
+**API:**
+```python
+cutin_is_conflict(case, cfg) -> bool       # case has 'trigger_d', 'ego_speed_kmh', 'dart_speed_kmh'
+lead_brake_is_conflict(case, cfg) -> bool  # case has 'headway_d' (m), 'ego_speed_kmh'
+```
+
+### Lead-brake Kinematic Formula
+
+```
+Phase 1: gap unchanged (both at v_e)         t1 = LEAD_BRAKE_AFTER_M / v_e
+Phase 2: lead brakes to stop                 t2 = v_e / LEAD_DECEL
+                                             gap_at_stop = headway_d − v_e²/(2·LEAD_DECEL)
+Phase 3: lead stationary, ego closes in      t3 = max(0, gap_at_stop) / v_e
+is_conflict = (t1 + t2 + t3 ≤ MAX_TICKS · FIXED_DT)
+```
+
+### Conflict Check Results (current matrix, LEAD_DECEL=6.0)
+
+| Scenario | Total cases | `is_conflict` | Boundary case |
+|---|---|---|---|
+| Cut-in | 50 | **all 50** | 20 km/h + trigger_d=40 m → t_conflict ≈ 7.1 s ≤ 20 s ✓ |
+| Lead-brake (LEAD_DECEL=6.0) | 50 | **all 50** | 20 km/h + THW=3.0 s → t_conflict ≈ 4.9 s ≤ 20 s ✓ |
+
+With the current parameters, `Rc_conflict = Rc_all` (all cases are conflict cases).
+
+> **Note on wider matrices:** If `LEAD_DECEL` is reduced significantly or `THW` increased substantially, no-conflict cases may appear. Run `python tools/check_conflict.py` before any matrix run. No-conflict cases are **not excluded** from the CSV but are not counted in `Rc_conflict`.
+
+---
+
+## 4. Per-Case Algorithm Pipeline
+
+Each case runs in sync-mode loop at `FIXED_DT = 0.05 s` (20 FPS). Every tick computes the following from **CARLA ground truth** and feeds it to the controller.
+
+All three controllers receive the same inputs; performance differences come purely from decision logic.
+
+### Step 1 — Initial Headway (THW → metres)
+
+```python
+if USE_THW:
+    headway_d = v_e_ms * headway_thw      # v_e in m/s
+# Lead vehicle spawns at: y = EGO_SPAWN.y - headway_d
+```
+
+### Step 2 — Surface Gap
+
+```python
+gap = max(0, dist_center - gap_offset)
+# Cut-in:   gap_offset = ego.extent.x + dart.extent.y  (front-of-ego vs side-of-dart)
+# Lead-brake: gap_offset = ego.extent.x + lead.extent.x (rear-end geometry)
+```
+
+`perc.distance` and the recorded `s_clearance` are both **surface gap** (not center-to-center).
+
+### Step 3 — TTC
+
+```python
+rel_speed = max(0, (gap_prev - gap) / FIXED_DT)
+TTC       = gap / rel_speed     # = ∞ when rel_speed ≈ 0
+```
+
+### Step 4 — Lead Vehicle Deceleration (Ground-truth + EMA)
+
+```python
+raw_decel      = max(0, (v_lead_prev - v_lead) / FIXED_DT)
+lead_decel_ema = 0.3 * raw_decel + 0.7 * lead_decel_ema
+```
+
+`LEAD_DECEL` is never read from config directly by the controller — it is estimated via finite differences and EMA for realism.
+
+### Step 5 — Ego Brake Model (kinematic, friction-limited)
+
+```python
+a_max     = mu * g                         # friction ceiling
+a_cmd     = brake_cmd * a_max              # controller output in [0,1]
+a_applied = min(a_cmd, a_max)              # hard clamp
+v_new     = max(0.0, v_model - a_applied * FIXED_DT)
+```
+
+- Updated from `v_model` (captured at brake onset), not read back from CARLA
+- `peak_decel` logged is always ≤ `a_max`
+- Response time `t_d` and build-up time `t_s` are effectively 0 within one tick (0.05 s) — see Section 9
+
+---
+
+## 5. Controller Logic
+
+### Baseline — Static TTC (`control/baseline_static_ttc.py`)
+
+```
+TTC ≤ TTC_BRAKE_FULL (0.6 s) → full brake (1.0)
+TTC ≤ TTC_WARN_FULL  (1.6 s) → partial brake (PARTIAL_BRAKE = 0.4)
+```
+
+**Weakness:** Fixed thresholds, unaware of speed or road friction → fails to stop in time on wet roads at higher speeds.
+
+### Proposed — Adaptive TTC (`control/proposed_dynamic_ttc.py`)
+
+```
+bump     = K_SPEED * max(0, (v_kmh - V0) / 100) + K_MU * max(0, (MU0 - mu))
+thr_full = TTC_BRAKE_FULL + bump
+thr_warn = max(TTC_WARN_FULL, thr_full + 0.5)
+```
+
+**Improvement:** Higher speed / lower friction → higher thresholds → earlier braking.
+
+### Proposed Enhanced — Required-Deceleration (`control/proposed_enhanced.py`)
+
+```
+a_max   = mu * g
+d_lead  = v_lead² / (2 * a_lead)          # distance lead still travels before stopping
+a_req   = v_ego² / (2 * (gap + d_lead))   # deceleration ego needs to avoid collision
+urgency = a_req / a_max
+  urgency ≥ REQ_FULL_FRAC (0.9) → full brake
+  urgency ≥ REQ_WARN_FRAC (0.6) → partial brake
+```
+
+**Mechanism:** When lead brakes: `a_lead ↑ → d_lead ↓ → a_req ↑ → urgency ↑` → braking triggered at the right moment.  
+Cut-in scene: `v_lead = 0 → d_lead = 0 → a_req = v_e² / (2 × gap)` (stationary obstacle case).
+
+**Controller parameter summary:**
+
+| Parameter | Value | Applies to |
+|---|---|---|
+| `TTC_WARN_FULL` | 1.6 s | baseline, proposed |
+| `TTC_BRAKE_FULL` | 0.6 s | baseline, proposed |
+| `PARTIAL_BRAKE` | 0.4 | all three |
+| `DYN_V0`, `DYN_MU0` | 40 km/h, 0.85 | proposed |
+| `DYN_K_SPEED`, `DYN_K_MU` | 1.2, 1.5 | proposed |
+| `REQ_FULL_FRAC`, `REQ_WARN_FRAC` | 0.9, 0.6 | proposed_enhanced |
+
+---
+
+## 6. CPEIM Metrics and Aggregation Rules
+
+Five CPEIM indices are logged per run in every CSV:
+
+| Index | CSV column | Formula / source |
+|---|---|---|
+| s (clearance) | `s_clearance` | Surface gap (m) when ego stops; **not** center-to-center |
+| a_b (MFDD) | `a_b_mfdd` | `(v_b² - v_f²) / (25.92 × (S_f - S_b))`, v ∈ [0.1, 0.8]·v₀ |
+| T_c (warning lead time) | `t_c_warn` | TTC at the moment braking is initiated (s) |
+| Δv_spd (speed variation) | `dv_speed_var` | `v_ego_start - v_collision` (km/h); = `v_ego_start` for avoided cases |
+| R_c | derived from `avoided` | `n_avoided / n_total` |
+
+**Aggregation rules (used by `summarize()` and `core/report.py`):**
+
+| Index | Aggregation rule | Reason |
+|---|---|---|
+| `Rc_all` | `n_avoided / n_total` | Avoidance rate over all cases |
+| `Rc_conflict` | `n_avoided_conflict / n_conflict` (is_conflict=True) | Avoidance rate over safety-critical cases only |
+| `mean_ab` (MFDD) | Average over `a_b_mfdd > 0` only | 0 means ego did not decelerate to 10% v₀; not a valid MFDD sample |
+| `mean_sc` (s_clearance) | Average over `avoided=True` only | For collisions, s=0 is not a clearance measurement |
+| `mean_tc` (T_c_warn) | Average over `t_c_warn > 0` only | 0 means controller never braked; not a T_c sample |
+| `mean_dv` (Δv_spd) | Average over all rows | Speed reduction is informative in all cases |
+
+> **Do not use the composite CPEIM score:** Weights `W_S/W_AB/W_TC/W_DV/W_RC` in `core/metrics.py` come from the liu2025 V-VRU (pedestrian) scenario, not from a car-to-car scenario. Report the 5 raw indices + Rc instead.
+
+---
+
+## 7. CSV Schema
+
+### Cut-in results (`results/matrix_*.csv`)
+
+| Column | Meaning |
+|---|---|
+| `label`, `controller`, `delay_frames` | Controller identifier + perception latency |
+| `ego_speed_kmh`, `mu`, `trigger_d`, `dart_speed_kmh` | Case parameters |
+| `avoided`, `collision_with`, `collision_speed_kmh` | Outcome: avoided? / collided with what / speed at impact |
+| `s_clearance` | **Surface gap** (m) when ego stops; 0 = collision or did not stop |
+| `a_b_mfdd` | MFDD (m/s²); 0 = ego speed did not fall to 10% of initial speed |
+| `t_c_warn` | TTC at brake onset (s); 0 = no braking, or TTC=∞ at brake time |
+| `dv_speed_var` | Speed reduction (km/h) = `v_start - v_collision` (or `v_start` if stopped) |
+| `peak_decel` | Max applied deceleration (m/s²) after clamp; always ≤ `a_max` |
+| `brake_distance` | Distance to stop (m) |
+| `a_req_at_brake` | Required deceleration (m/s²) at brake onset |
+| `a_max` | Friction ceiling = μ·g (m/s²) |
+| `min_dist`, `result_txt` | Minimum centre-to-centre distance / text result summary |
+| `is_conflict` | ★ `True` = ego at constant speed would collide within 20 s (kinematic, pre-sim) |
+
+### Lead-brake results (`results/lead_matrix_*.csv`)
+
+Same as above, with three additional columns:
+
+| Column | Meaning |
+|---|---|
+| `lead_speed_kmh` | Lead vehicle speed before braking (km/h) |
+| `headway_thw` | Time headway (s); 0 if using fixed-distance mode |
+| `headway_d` | Actual headway distance (m) = THW × v_e (or fixed value) |
+
+---
+
+## 8. Pre-Run Checklist
+
+Verify all of the following before pressing `run_matrix.py` / `run_matrix_lead.py`:
+
+- [ ] **LEAD_DECEL** = 6.0 to match paper (Euro-NCAP CCRb §3.4) — must pass via env var: `LEAD_DECEL=6.0 python run_matrix_lead.py` (code default = 4.0)
+- [ ] **MATRIX** (speed, THW, μ, trigger_d) matches paper Tables I–II (50 cases/controller):
+      cut-in: speed={20,30,40,50,60}, Δd={20,25,30,35,40} m, μ={0.85,0.40}
+      lead-brake: speed={20,30,40,50,60}, THW={1.0,1.5,2.0,2.5,3.0} s, μ={0.85,0.40}
+- [ ] **Conflict check passes:** `python tools/check_conflict.py` (no CARLA needed)
+      Confirm conflict/no-conflict counts match what is reported in the paper
+- [ ] **MATRIX_RUNS** has 3 labels: `baseline`, `proposed`, `proposed_enhanced`, each with `delay_frames=0`
+- [ ] **Controller params** match paper claims: `TTC_WARN_FULL=1.6`, `TTC_BRAKE_FULL=0.6`, `DYN_K_SPEED=1.2`, `DYN_K_MU=1.5`, `REQ_FULL_FRAC=0.9`, `REQ_WARN_FRAC=0.6`
+- [ ] **DETECTION_SOURCE** = `"groundtruth"` (both scenarios, matches paper Section IV-B)
+- [ ] **BRAKE_MODEL** = `"kinematic"` (both scenarios)
+- [ ] Verify `peak_decel ≤ a_max` in all CSV rows: `python core/report.py results/*.csv`
+- [ ] Verify `is_conflict` is consistent with paper definition: `python core/report.py results/*.csv`
+- [ ] Record CSV filename + timestamp in paper Section IV-C for reproducibility
+
+---
+
+## 9. Brake Timing Parameters — Equation (1)
+
+Equation (1) in the paper:
+
+```
+s = v_e * (t_d + t_s/2) + v_e² / (2 * μ * g)
+```
+
+This equation is **expository only** — it is not executed at runtime. It motivates the kinematic deceleration cap. The three controllers use TTC thresholds or required-deceleration urgency, not this formula.
+
+### t_d — Actuation / Processing Delay
+
+| Item | Value |
+|---|---|
+| Config variable | `delay_frames` (frame count); `SINGLE_DELAY_FRAMES` in configs |
+| File | `config/scenario_cutin.py:100`, `config/scenario_lead_brake.py:114` (config); `core/runner.py:97–198`, `core/runner_lead_brake.py:141–235` (runtime) |
+| Value in all matrix runs | **0 s** (= 0 frames × 0.05 s/frame) |
+
+**Mechanism:** A FIFO deque of length `delay_frames + 1`. With `delay_frames = 0`, `maxlen = 1`, so the controller always reads the current-frame detection — zero latency. The mechanism supports non-zero delay (e.g. 16 frames = 0.8 s) but all production runs use 0.
+
+```python
+det_buffer = deque(maxlen=delay_frames + 1)
+...
+det_buffer.append(detected_now)
+perceived = det_buffer[0]
+```
+
+### t_s — Brake Build-up (Ramp) Time
+
+| Item | Value |
+|---|---|
+| Variable | *(none — no ramp is implemented)* |
+| File | `core/actors.py:74–93` (`apply_kinematic_brake`) |
+| Value in all runs | **0 s** — braking force reaches commanded level instantaneously |
+
+**Mechanism:** `apply_kinematic_brake` converts `brake_cmd ∈ [0, 1]` directly to `a_cmd = brake_cmd × μg` and clamps at `a_max = μg` in a single tick. `PARTIAL_BRAKE = 0.4` is the fraction of full brake during the warning phase — it is not a ramp duration.
+
+```python
+def apply_kinematic_brake(ego, v_model, brake_cmd, mu, dt, g=9.81):
+    a_max    = max(0.0, mu) * g
+    a_cmd    = max(0.0, brake_cmd) * a_max
+    a_applied = min(a_cmd, a_max)      # hard clamp
+    v_new    = max(0.0, v_model - a_applied * dt)
+```
+
+### Summary
+
+| Timing parameter | Effective value | How |
+|---|---|---|
+| `t_d` | 0 s | `delay_frames = 0` in all `MATRIX_RUNS` |
+| `t_s` | 0 s | No ramp in `apply_kinematic_brake` |
+| One-tick mechanical lag | 0.05 s | Controller at tick k; velocity change visible from tick k+1 (inherent to discrete-time sim) |
+
+---
+
+## 10. YOLO Detection Table Verification (TABLE V)
+
+**Review date:** 2026-06-25  
+**Scope:** Verify TABLE V in `paper-latex3/root.tex` against code and actual results.
+
+### TABLE V in Paper
+
+```
+TABLE V: Descriptive YOLOv8n detection counts and confidences
+         on the reconstructed 3DGS scene
+┌──────────────────┬──────┬──────┬──────┬──────┐
+│ Pass             │ Det. │ Cars │ Mean │ Max  │
+├──────────────────┼──────┼──────┼──────┼──────┤
+│ Background only  │  99  │  96  │ 0.64 │ 0.88 │
+│ With actor       │ 112  │ 109  │ 0.63 │ 0.92 │
+└──────────────────┴──────┴──────┴──────┴──────┘
+```
+
+### Source Log Files
+
+Two runs were made on 2026-06-13. Paper uses **Log 2** (175303):
+
+| Value | Log 1 (174714) | Log 2 (175303) | Paper |
+|---|---|---|---|
+| Background: cars | 96 | 96 | 96 ✓ |
+| Background: mean conf | 0.6336 → 0.63 | 0.6363 → **0.64** | 0.64 ✓ Log 2 |
+| Background: max conf | 0.878 → 0.88 | 0.8793 → 0.88 | 0.88 ✓ both |
+| With actor: cars | **108** | **109** | 109 ✓ Log 2 |
+| With actor: mean conf | 0.6347 → 0.63 | 0.6344 → 0.63 | 0.63 ✓ both |
+| With actor: max conf | 0.9044 → **0.90** | 0.9238 → **0.92** | 0.92 ✓ Log 2 |
+| Traffic light conf (bg) | 0.7166 → 0.72 | 0.8174 → **0.82** | 0.82 ✓ Log 2 |
+
+**Conclusion: All TABLE V values match Log 2 (perception_log_20260613_175303) when rounded to 2 d.p.**
+
+### Code vs. Paper Consistency
+
+| Paper claim | Code value | File | Match |
+|---|---|---|---|
+| Model: YOLOv8n | `YOLO_MODEL = "yolov8n.pt"` | `config/scenario_cutin.py` | ✅ |
+| conf threshold: 0.45 | `CONF_THRESH = 0.45` | `config/scenario_cutin.py` | ✅ |
+| Resolution: 1280×720 | `CAM_W=1280, CAM_H=720` | `config/scenario_cutin.py` | ✅ |
+| Frames sampled: 38 | `n_frames_sampled: 38` in `.meta.json` | both log files | ✅ |
+| Background: no vehicles spawned | `if pass_type == "with_actor": dart = spawn_vehicle(...)` | `perception/scene_logger.py:107` | ✅ |
+| With actor: dart vehicle parked | `actors.hold(dart)` (stationary throughout pass) | `perception/scene_logger.py:113` | ✅ |
+| Counts are cumulative, not unique vehicles | `detect_all(frame)` called per frame, not deduplicated | `perception/scene_logger.py:159` | ✅ |
+
+### Why 1 Spawned Vehicle → +13 Detections
+
+Detection counts are **cumulative across all 38 frames**, not unique vehicle counts. The dart vehicle is visible in 10 consecutive frames (frames 14–24). In some frames YOLO generates 2 bounding boxes for the same vehicle (changing camera angle). Background count of 96 uses the same cumulative method. The paper correctly states "99 detections **over** 38 sampled frames," indicating this cumulative counting.
+
+### Observations
+
+1. Log 1 (174714) differs from Log 2 in cars (108 vs 109) and max confidence (0.90 vs 0.92) due to minor YOLO CPU stochasticity between runs. Only Log 2 is used in the paper.
+2. **Reproducibility gap:** The specific log filename/timestamp (`perception_log_20260613_175303`) is not stated in the paper. Adding this to Section IV-D would improve reproducibility.
+
+---
+
+## 11. Pre-Submission Code Review Notes (ICARCV 2026)
+
+**Review date:** 2026-06-18  
+**Reviewer basis:** `paper-latex/root.tex`, all source files, results CSVs, README
+
+### Severity Legend
+
+| Tag | Meaning |
+|---|---|
+| **Critical** | Factual error or internal inconsistency; likely reviewer rejection |
+| **Major** | Materially weakens claims or reproducibility |
+| **Minor** | Polish / clarification |
+
+---
+
+### Critical Issues
+
+**[C1] Lead-brake conflict-only Rc and collision counts do not match current results data**
+
+The paper reports (Table II):
+- baseline: 25.0% conflict-only Rc, Coll.=18
+- adaptive-TTC: 33.3%, Coll.=16
+- required-decel: **92.0%**, Coll.=2
+
+The current CSV (`results/lead_matrix_20260613_112347.csv`) yields different conflict-only figures. These numbers originate from a superseded run with `LEAD_DECEL = 9.0` (too strong, marked "เดิม 9.0 แรงเกินจริง"). Current code uses `LEAD_DECEL = 4.0`.
+
+**Fix:** Re-run `run_matrix_lead.py` with current code. Decide on one consistent `LEAD_DECEL` value (4.0 for moderate, 6.0 for Euro-NCAP standard). State it explicitly in the paper. Update Table II, abstract, and conclusion.
+
+---
+
+**[C2] Symbol `g` used for both gap and gravitational acceleration in the same equation block**
+
+- Eq. (1): `g` = 9.81 m/s² (gravitational)
+- Eq. (2): `TTC = g / Δv_r` — here `g` = inter-vehicle gap
+- Section V.C gather block: `a_max = μg` (gravitational) and `a_req = v_e² / (2*(g + d_lead))` (gap) — in the **same block**
+
+**Fix:** Replace gap symbol with `d` (or `d_g`) throughout Eq. (2) and the required-decel derivation. Reserve `g` solely for the gravitational constant.
+
+---
+
+**[C3] Abstract compares cut-in overall Rc with lead-brake conflict-only Rc**
+
+Abstract line 31: "raising the conflict-case avoidance rate to 62.5% in cut-in and 92.0% in lead-braking."
+- 62.5% cut-in = overall Rc (all 32 cases are conflict cases, so these happen to coincide)
+- 92.0% lead-brake = conflict-only Rc (over 25 cases, not all 32)
+
+This comparison is misleading. The lead-brake all-32 Rc is only 71.9%.
+
+**Fix:** Report either all-32 Rc for both scenarios ("62.5% cut-in, 71.9% lead-braking"), or conflict-only for both with a clear explanation that all cut-in cases are conflict cases.
+
+---
+
+### Major Issues
+
+**[M1] LEAD_DECEL not stated in the paper**
+
+The paper never states the lead vehicle braking deceleration. Euro-NCAP CCRb typically uses 6–9 m/s²; the code uses 4.0 m/s² (a deliberate departure that must be justified).
+
+**Fix:** Add to Table I or Section IV.B: "Lead deceleration: X m/s²." Justify the choice.
+
+---
+
+**[M2] Partial brake fraction (0.4) not stated**
+
+The paper describes two brake levels for all controllers but never states the partial brake fraction. `PARTIAL_BRAKE = 0.4` is a tuned parameter that affects outcomes.
+
+**Fix:** Add one sentence per controller: "Partial braking applies 40% of full brake command."
+
+---
+
+**[M3] Only Rc presented despite CPEIM defining 5 indices**
+
+All five CPEIM indices are logged in every CSV run. Only Rc is shown in the results tables. A reviewer from the CPEIM community will flag this as selective reporting.
+
+**Fix:** Add a compact table with all five indices (see aggregated table in Section 6 of this document). No new simulation runs are required — this is a reporting change only.
+
+**Full CPEIM table from existing data:**
+
+*Cut-in / Dart-out (n = 32 cases/controller)*
+
+| Controller | R_c | s_c (m) | a_b (m/s²) | T_c (s) | Δv_av (km/h) | Δv_col (km/h) |
+|---|---|---|---|---|---|---|
+| baseline | 31.2% | 1.80 [0.26–3.93] | 4.91 [3.50–7.87] | 1.33 [0.87–1.59] | 38.0 | 32.1 |
+| adaptive-TTC | 46.9% | 1.95 [0.26–3.93] | 4.49 [3.50–6.81] | 1.38 [0.87–1.87] | 36.0 | 39.8 |
+| required-decel | 62.5% | **0.75** [0.18–2.09] | **6.33** [3.51–9.06] | 1.21 [0.15–2.09] | 41.0 | 37.1 |
+
+*Lead-brake / CCRb (n = 32 cases/controller)*
+
+| Controller | R_c | s_c (m) | a_b (m/s²)† | T_c (s) | Δv_av (km/h) | Δv_col (km/h) |
+|---|---|---|---|---|---|---|
+| baseline | 18.8% | 1.06 [0.67–1.55] | 6.30 [3.50–8.36] | 1.53 [1.47–1.59] | 33.3 | 38.0 |
+| adaptive-TTC | 25.0% | 1.04 [0.26–1.71] | 5.80 [3.50–8.36] | 1.67 [1.47–1.98] | 32.5 | 41.2 |
+| required-decel | 71.9% | 0.97 [0.23–4.23] | 5.80 [3.41–8.36] | **7.20** [0.80–24.68]‡ | 41.3 | 53.9 |
+
+> †MFDD averaged over rows where `a_b_mfdd > 0` only.  
+> ‡Required-decel T_c is structurally large: braking triggers when urgency ≥ 0.6 while TTC is still far above any TTC threshold. Large T_c reflects early intervention, not late detection.
+
+*Source files: `results/matrix_20260613_140524.csv` and `results/lead_matrix_20260613_112347.csv`.*
+
+---
+
+**[M4] README stated s_clearance is center-to-center distance (now fixed)**
+
+Original README incorrectly stated "s เป็นระยะ center-to-center." Actual code (`core/runner.py`, `core/runner_lead_brake.py`) computes `s_clearance = gap = dist2d - gap_offset` where `gap_offset` accounts for vehicle dimensions — this is a **surface gap**. Now corrected.
+
+---
+
+**[M5] T_c for required-decel controller is structurally different and requires explanation**
+
+For TTC-based controllers, T_c ≈ threshold value (1.5–1.7 s). For required-decel, braking triggers when `a_req/a_max ≥ 0.6`, which can occur while TTC is still very large. Actual data: required-decel T_c mean = **7.20 s**, range [0.80, 24.68] s.
+
+**Fix:** Add a sentence in Section IV.C: "T_c is the TTC at the moment braking is initiated; for the required-deceleration controller this value is expected to be large (early intervention), whereas it is structurally bounded by the fixed thresholds for TTC-based controllers."
+
+---
+
+**[M6] MFDD = 0 for collision cases and partial-braking cases — undocumented**
+
+`MfddTracker.mfdd()` returns 0.0 when ego speed does not fall to 0.1 × v₀ (i.e., all collision runs and some partial-braking runs). Averaging this column without filtering substantially understates actual braking deceleration.
+
+**Fix:** Aggregate MFDD only over rows where `a_b_mfdd > 0`. State this filter explicitly in any table reporting `a_b`. (Already implemented in `core/metrics.py` `summarize()` and `core/report.py`.)
+
+---
+
+**[M7] CPEIM composite score weights come from V-VRU scenario, not car-to-car**
+
+`W_S, W_AB, W_TC, W_DV, W_RC = 0.1447, 0.0901, 0.2962, 0.0603, 0.4087` in `core/metrics.py` are from the liu2025 pedestrian scenario. These weights are **not** appropriate for car-to-car scenarios.
+
+**Fix:** Remove the composite score from output, or obtain the correct car-to-car weights from liu2025. A WARNING comment is already in the code. Only raw indices are reported in the paper.
+
+---
+
+### Notation Issues (Section 3 of review)
+
+| # | Issue |
+|---|---|
+| N2 | Eq. (1) uses `t_d` and `t_s`, but the code uses `delay_frames` and has no ramp. Add: "Eq.(1) serves as physical motivation for the deceleration cap; simulation uses kinematic integration per time step." |
+| N3 | "dry-surface behaviour reduces to baseline" — only partially true (speed term `k_v` also applies on dry roads). Recommend: "the μ-adaptive term engages only on wet surfaces, while a small speed-dependent term applies at all speeds." |
+| N5 | `a_max = μg` — with `g` meaning gravitational constant — should be `a_max = μ × 9.81` to distinguish from `g` (gap) in the same block. |
+| N7 | `Δv` for avoided cases = initial_speed (since collision_speed=0), making it non-discriminating across controllers on the same case. Note this in the paper. For collision cases, Δv = speed reduction before impact, which is informative. |
+
+---
+
+### Reproducibility Gaps
+
+| # | Missing from paper | Severity |
+|---|---|---|
+| Rep1 | `LEAD_DECEL` value | Major |
+| Rep2 | `PARTIAL_BRAKE = 0.4` | Major |
+| Rep3 | Perception log filename; YOLO CPU stochasticity (≤1 car difference between runs) | Minor |
+| Rep4 | UE5.5 build version | Minor |
+| Rep5 | YOLOv8n checkpoint version/hash | Minor |
+| Rep7 | `INPATH_MAX_RANGE`: 40 m (cut-in) vs 80 m (lead-brake) | Minor |
+| Rep8 | `LEAD_BRAKE_AFTER_M = 8.0 m` | Minor |
+
+---
+
+### Reviewer Red Flags
+
+| # | Flag | Recommendation |
+|---|---|---|
+| RF1 | 92% conflict-case avoidance headline is not reproducible from current code | Re-run with current code; update all claims |
+| RF2 | Baseline achieves 0% wet avoidance in both scenarios — may look deliberately weak | Add: "At μ=0.40, stopping distance exceeds available gap by construction at TTC≤0.6 s" |
+| RF3 | 5 CPEIM indices logged, only Rc reported | Add compact CPEIM table (see M3 above) |
+| RF4 | Range / closing speed are CARLA ground-truth, not sensor | Add one-clause caveat in abstract: "…using CARLA ground-truth range inputs…" |
+| RF6 | 3DGS contribution only via YOLO; YOLO is gated by ground-truth for braking | Tighten claim: "feasibility that a 3DGS-reconstructed scene can serve as substrate for repeatable, discriminative AEB evaluation" |
+
+### Top 3 Things to Fix Before Submission
+
+1. **[C1 + C3]** Re-run lead-brake with current code; update Table II, abstract, and conclusion with consistent Rc basis (all-cases or conflict-only — apply the same basis to both scenarios).
+2. **[C2]** Change gap symbol from `g` to `d` throughout (10-minute LaTeX edit).
+3. **[M3]** Add aggregated CPEIM index means. The T_c column (7.2 s for required-decel vs 1.5 s for TTC controllers) provides a mechanistic explanation of *why* required-decel outperforms — early intervention, not tuning.
+
+---
+
+## 12. Code Revision History
+
+### New Files Added
+
+#### `core/conflict.py`
+
+**Purpose:** Deterministic "conflict case" definition from kinematics — no CARLA run needed.
+
+A case is a conflict case if ego at constant speed would collide within `MAX_TICKS × FIXED_DT` seconds. Definition is:
+- Computed before simulation, before spawning actors
+- Identical for all three controllers
+- Not post-hoc
+
+API:
+```python
+lead_brake_is_conflict(case, cfg) -> bool
+cutin_is_conflict(case, cfg)      -> bool
+```
+
+---
+
+#### `core/report.py`
+
+**Purpose:** Read existing CSV → print CPEIM table per controller. Does not run simulation, does not modify CSV.
+
+```bash
+python core/report.py results/matrix_*.csv
+python core/report.py results/lead_matrix_*.csv
+```
+
+Required columns: `label`, `avoided`, `is_conflict`, `a_b_mfdd`, `s_clearance`, `t_c_warn`, `dv_speed_var`
+
+---
+
+#### `tools/check_conflict.py`
+
+**Purpose:** Compute `is_conflict` for every case in both matrices (pure kinematics, no CARLA).
+
+```bash
+python tools/check_conflict.py
+LEAD_DECEL=6.0 python tools/check_conflict.py
+```
+
+---
+
+### Modified Files
+
+#### `core/metrics.py`
+
+1. Added `is_conflict: bool = True` field to `RunRecord` (default `True` for cut-in; written to CSV via `asdict()`)
+2. Removed `mean_score` (composite score with wrong V-VRU weights)
+3. Fixed aggregation in `summarize()`:
+   - `rc_all` = avoidance rate over all cases
+   - `rc_conflict` = avoidance rate over `is_conflict=True` cases only
+   - `mean_ab` = average over `a_b_mfdd > 0` only
+   - `mean_sc` = average over `avoided=True` only
+   - `mean_tc` = average over `t_c_warn > 0` only
+   - `mean_dv` = average over all rows
+
+Weight constants `W_S/W_AB/W_TC/W_DV/W_RC` retained with a WARNING comment (for reference only).
+
+---
+
+#### `core/runner.py` (cut-in)
+
+Added `is_conflict` computation before the `try:` block so it is recorded even if actor spawn fails:
+```python
+from core.conflict import cutin_is_conflict
+is_conflict = cutin_is_conflict(case, cfg)
+rec = RunRecord(..., is_conflict=is_conflict)
+```
+
+---
+
+#### `core/runner_lead_brake.py`
+
+Added `is_conflict: bool = True` to `LeadBrakeRecord`. `headway_d` must be computed from THW first, then passed to `lead_brake_is_conflict`:
+```python
+from core.conflict import lead_brake_is_conflict
+_case_for_conflict = {**case, "headway_d": headway_d}
+is_conflict = lead_brake_is_conflict(_case_for_conflict, cfg)
+rec = LeadBrakeRecord(..., is_conflict=is_conflict)
+```
+
+---
+
+#### `config/scenario_lead_brake.py`
+
+Added `import os`. Changed `LEAD_DECEL` to be overridable via environment variable:
+```python
+# Before:
+LEAD_DECEL = 4.0
+
+# After:
+LEAD_DECEL = float(os.environ.get("LEAD_DECEL", "4.0"))
+```
+
+Code default remains 4.0. Paper runs use `LEAD_DECEL=6.0 python run_matrix_lead.py`.
+
+---
+
+#### `run_matrix.py` and `run_matrix_lead.py`
+
+- Removed `mean_score` from summary printout
+- Added `Rc_conflict` and 4 raw CPEIM indices with row counts used for averaging
+
+---
+
+### Matrix Widening — June 2026
+
+**Purpose:** Expand test matrix domain for research credibility. This is not data selection — all results are reported as-is, including hard cases.
+
+**Academic integrity:** All added values are domain-grounded; both low-speed and longer-reaction ends are expanded; all original hard cases are retained.
+
+| Scenario | Variable | Old values | New values |
+|---|---|---|---|
+| Cut-in | `ego_speed_kmh` | [30, 40, 50, 60] | [**20**, 30, 40, 50, 60] |
+| Cut-in | `trigger_d` (m) | [20, 25, 30, 35] | [20, 25, 30, 35, **40**] |
+| Lead-brake | `ego_speed_kmh` | [30, 40, 50, 60] | [**20**, 30, 40, 50, 60] |
+| Lead-brake | `HEADWAY_THW` (s) | [1.0, 1.5, 2.0, 2.5] | [1.0, 1.5, 2.0, 2.5, **3.0**] |
+
+| Scenario | Old count | New count |
+|---|---|---|
+| Cut-in (speed × μ × trigger_d) | 4×2×4 = **32** | 5×2×5 = **50** |
+| Lead-brake (speed × THW × μ) | 4×4×2 = **32** | 5×5×2 = **50** |
+| Total runs (× 3 controllers) | 96/scenario | **150/scenario** |
+
+**Conflict check results (matrix widened, LEAD_DECEL=4.0):**
+
+| Scenario | Cases | Conflict | No-conflict | Boundary case |
+|---|---|---|---|---|
+| Cut-in | 50 | **50** | 0 | 20 km/h + 40 m → t ≈ 7.1 s ≤ 20 s |
+| Lead-brake | 50 | **50** | 0 | 20 km/h + 3.0 s THW → t ≈ 5.1 s ≤ 20 s |
+
+---
+
+### Unchanged Elements
+
+The following were **not modified** in any revision:
+- Controller decision logic (`baseline_static_ttc`, `proposed_dynamic_ttc`, `proposed_enhanced`)
+- MFDD formula in `MfddTracker`
+- Kinematic brake cap (`apply_kinematic_brake`, `peak_decel ≤ a_max`)
+- Existing CSV column names (only `is_conflict` was added)
+- `FRAME_SYNC = True` and `FIXED_DT = 0.05` (simulation determinism)
+- Cut-in / lead-brake scene logic (apart from config changes)
+- Existing result files in `results/` (read-only)
+
+---
+
+*This document was generated from: `CODE_CHANGES.md`, `REVIEW.md`, `docs/brake_timing_params.md`, and `review_yolo_tablev.md`. Last updated: 2026-07-09.*

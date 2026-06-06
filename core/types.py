@@ -11,6 +11,9 @@ class Perception:
     rel_speed: float      # ความเร็วเข้าหากัน (m/s, >0 = กำลังเข้าใกล้)
     ttc: float            # distance / rel_speed (วินาที, inf ถ้าไม่เข้าใกล้)
     box_h: float = 0.0    # ความสูงกล่อง YOLO (px) — ไว้ดีบัก/วาด
+    # ── ข้อมูลรถข้างหน้า (ground-truth, แชร์ให้ทุกสมองกลเท่ากันเพื่อความยุติธรรม) ──
+    lead_speed: float = 0.0   # ความเร็วรถข้างหน้า (m/s) — baseline จะไม่ใช้ก็ได้
+    lead_decel: float = 0.0   # ความหน่วงรถข้างหน้าที่ "ประมาณจากการเคลื่อนที่จริง" (m/s², ≥0)
 
 
 @dataclass

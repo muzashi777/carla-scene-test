@@ -1,26 +1,40 @@
 # -*- coding: utf-8 -*-
 """
-ไล่ TEST MATRIX ทั้งหมด (headless ไม่มีภาพ) สำหรับแต่ละสมองกลใน MATRIX_RUNS
-แล้วเขียน CSV + สรุป R_c เทียบกัน → เช็กว่าได้เป้า +20% (成果2) ไหม
-วิธีใช้:  python run_matrix.py
+ไล่ TEST MATRIX ทั้งหมดของฉาก lead-brake (headless ไม่มีภาพ) สำหรับแต่ละสมองกลใน MATRIX_RUNS
+แล้วเขียน CSV (results/lead_matrix_*.csv) + สรุป R_c เทียบกัน → เช็กเป้า +20% (成果2)
+แยกขาดจากฉาก cut-in (run_matrix.py) เพื่อง่ายต่อการทดสอบ/ดีบักทีละฉาก
+วิธีใช้:  python run_matrix_lead.py
 """
 import sys, os, itertools, datetime
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-import config.scenario_cutin as cfg
+import config.scenario_lead_brake as cfg
 from core.carla_session import CarlaSession
-from core.runner import run_case
+from core.runner_lead_brake import run_case
 from core.metrics import write_csv, summarize
 from perception.yolo_detector import YoloDetector
 
 
 def build_cases():
-    keys = ["ego_speed_kmh", "mu", "trigger_d", "dart_speed_kmh"]
-    combos = itertools.product(
-        cfg.MATRIX["ego_speed_kmh"], cfg.MATRIX["mu"],
-        cfg.MATRIX["trigger_d"], cfg.MATRIX["dart_speed_kmh"],
-    )
-    return [dict(zip(keys, c)) for c in combos]
+    """สร้างรายการเคสจาก MATRIX
+    ระยะห่าง: USE_THW=True → ไล่ headway_thw (วินาที) / USE_THW=False → ไล่ headway_d (เมตร, โหมดเดิม)
+    ความเร็ว: LEAD_SAME_AS_EGO=True → รถนำเร็วเท่า ego / False → lead_speed_kmh เป็นตัวแปรแยก
+    runner จะแปลง THW→เมตรจริง เอง (อิงความเร็ว ego)
+    """
+    same = getattr(cfg, "LEAD_SAME_AS_EGO", True)
+    use_thw = getattr(cfg, "USE_THW", False)
+    gap_key = "headway_thw" if use_thw else "headway_d"
+    gap_vals = cfg.MATRIX["headway_thw"] if use_thw else cfg.MATRIX["headway_d"]
+    speeds, mus = cfg.MATRIX["ego_speed_kmh"], cfg.MATRIX["mu"]
+
+    cases = []
+    if same:
+        for v, g, m in itertools.product(speeds, gap_vals, mus):
+            cases.append({"ego_speed_kmh": v, "lead_speed_kmh": v, gap_key: g, "mu": m})
+    else:
+        for ve, vl, g, m in itertools.product(speeds, cfg.MATRIX["lead_speed_kmh"], gap_vals, mus):
+            cases.append({"ego_speed_kmh": ve, "lead_speed_kmh": vl, gap_key: g, "mu": m})
+    return cases
 
 
 def main():
@@ -29,7 +43,7 @@ def main():
         cfg.TARGET_CLASSES, cfg.VEHICLE_CLS, cfg.LANE_LEFT, cfg.LANE_RIGHT, cfg.MIN_BOX_H,
     )
     cases = build_cases()
-    print(f"[MATRIX] {len(cases)} เคส/สมองกล × {len(cfg.MATRIX_RUNS)} สมองกล "
+    print(f"[MATRIX/lead-brake] {len(cases)} เคส/สมองกล × {len(cfg.MATRIX_RUNS)} สมองกล "
           f"= {len(cases)*len(cfg.MATRIX_RUNS)} รัน")
 
     records = []
@@ -44,14 +58,15 @@ def main():
 
     # ── เขียน CSV ──
     stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    csv_path = os.path.join(cfg.RESULTS_DIR, f"matrix_{stamp}.csv")
+    prefix = getattr(cfg, "RESULTS_PREFIX", "lead_matrix")
+    csv_path = os.path.join(cfg.RESULTS_DIR, f"{prefix}_{stamp}.csv")
     write_csv(records, csv_path)
     print(f"\n[CSV] เขียนผลที่ {csv_path}")
 
     # ── สรุป + เช็ก 20% ──
     summary = summarize(records)
     print("\n" + "=" * 72)
-    print("สรุปต่อสมองกล (ฉาก cut-in):")
+    print("สรุปต่อสมองกล (ฉาก lead-brake):")
     labels = [r["label"] for r in cfg.MATRIX_RUNS]
     for label in labels:
         if label not in summary:

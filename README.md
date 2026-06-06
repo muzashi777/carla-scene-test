@@ -1,68 +1,163 @@
-# AEB Cut-in Test Harness (ฉาก 3DGS + UE5.5 → CARLA)
+# AEB Test Harness — 3DGS + UE5.5 → CARLA
 
-ชุดทดสอบ AEB สำหรับฉาก **cut-in / dart-out** (รถพุ่งออกด้านข้างมาจอดขวางเลน)
-รันบนฉาก 3DGS ที่นำเข้า UE5.5 (ใช้ collision mesh จาก UE5.5 โดยยังไม่มี `.xodr`/waypoint)
-ออกแบบให้ตรงเป้า **成果2**: นำฉากเข้า CARLA ทดสอบสมองกลขับขี่ และยกอัตราหลบชน **+20%**
+A simulation test harness for Automatic Emergency Braking (AEB) controllers, built for a 3D Gaussian Splatting scene imported into CARLA via UE5.5. Supports two independent test scenarios with three swappable controllers. Results are reported in the ICARCV 2026 paper *"A Real-to-Simulation Workflow for AEB Controller Testing Using 3D Gaussian Splatting in CARLA"*.
 
-## โครงสร้าง
+**Paper results:** cut-in `Rc_conflict` 44.0% → 72.0%; lead-brake 34.0% → 68.0% (baseline → proposed_enhanced).
+
+---
+
+## Scenarios
+
+| Scenario | Description | Entry point |
+|---|---|---|
+| **Cut-in / Dart-out** | A dart vehicle launches laterally from the roadside and stops blocking the ego lane. | `run_single.py` / `run_matrix.py` |
+| **Lead-brake (CCRb)** | A lead vehicle ahead in the same lane (matching ego speed) brakes suddenly to a stop. Euro-NCAP CCRb. | `run_single_lead.py` / `run_matrix_lead.py` |
+
+Both scenarios share the same session, actors, controllers, YOLO, metrics, and viz infrastructure.
+
+---
+
+## Directory Structure
 
 ```
-config/scenario_cutin.py     ★ แก้ตัวแปรทุกอย่างที่นี่ (ฉาก, YOLO, μ, test matrix, สมองกล)
+config/
+  scenario_cutin.py        ★ All parameters for cut-in (scene, YOLO, μ, matrix, controllers)
+  scenario_lead_brake.py   ★ All parameters for lead-brake (same structure, different values)
 core/
-  carla_session.py           เปิด/ปิด sync mode, คืน settings เดิม
-  actors.py                  spawn รถ, ตั้งความลื่น μ ที่ล้อ, ติดเซ็นเซอร์
-  scenario_cutin.py          ตรรกะฉาก (ego cruise, dart trigger ตามระยะ, จอดขวาง)
-  types.py                   Perception / EgoState (ส่งให้สมองกล)
-  runner.py                  เครื่องรันเคสเดียว (ผูกทุกอย่าง คืน RunRecord)
-  metrics.py                 5 ดัชนี CPEIM + CSV + สรุป Rc
-  viz.py                     แสดงภาพ OpenCV (เฉพาะ run_single)
-perception/yolo_detector.py  YOLO: บอก "มีรถในเลน ego ใกล้พอไหม"
+  carla_session.py         Open/close sync mode, restore original settings
+  actors.py                Spawn vehicles, set tire friction μ, attach sensors
+  types.py                 Perception / EgoState dataclasses (controller input)
+  metrics.py               RunRecord, 5 CPEIM indices, CSV writer, summarize()
+  conflict.py              ★ Kinematic is_conflict (pre-sim, no CARLA needed)
+  report.py                ★ Read CSV → print CPEIM table (standalone, no CARLA)
+  viz.py                   OpenCV overlay (run_single* only)
+  scenario_cutin.py        Cut-in scene logic (ego cruise, dart trigger, blocking stop)
+  runner.py                Single-case runner for cut-in (returns RunRecord)
+  scenario_lead_brake.py   Lead-brake scene logic
+  runner_lead_brake.py     Single-case runner for lead-brake (returns LeadBrakeRecord)
 control/
-  base_controller.py         ★ สัญญา interface ของปลั๊กอินสมองกล (throttle/brake/steer)
-  baseline_static_ttc.py     สมองกลเก่า: TTC คงที่
-  proposed_dynamic_ttc.py    สมองกลใหม่: TTC ปรับตาม speed + μ
-run_single.py                รัน 1 เคส + ภาพ (ดีบัก/พรีเซนต์)
-run_matrix.py                ไล่ matrix ทั้งหมด + CSV + เช็ก +20%
+  base_controller.py       ★ Plugin interface: throttle/brake/steer (BaseController)
+  baseline_static_ttc.py   @register("baseline")          — Static TTC
+  proposed_dynamic_ttc.py  @register("proposed")          — Adaptive TTC (speed + μ)
+  proposed_enhanced.py     @register("proposed_enhanced") — Required-deceleration
+perception/
+  yolo_detector.py         YOLOv8n wrapper: is there a vehicle in the ego lane?
+  scene_logger.py          Perception log runner (background + with-actor passes)
+  percep_viz.py            Visualisation helper for perception logs
+tools/
+  check_conflict.py        ★ Verify is_conflict for every matrix case (no CARLA needed)
+run_single.py              Cut-in: run 1 case with OpenCV display
+run_matrix.py              Cut-in: sweep full matrix → results/matrix_*.csv
+run_single_lead.py         Lead-brake: run 1 case with display
+run_matrix_lead.py         Lead-brake: sweep full matrix → results/lead_matrix_*.csv
+run_perception_log.py      Run YOLO perception logging (background + actor passes)
 ```
 
-## วิธีรัน
+---
 
-วาง `yolov8n.pt` ไว้โฟลเดอร์เดียวกัน เปิด CARLA (โหลดฉาก 3DGS ของคุณ) แล้ว:
+## Prerequisites
 
+- CARLA 0.9.x with your 3DGS scene loaded (collision mesh from UE5.5, no `.xodr`/waypoints needed)
+- Python 3.8+, packages: `carla`, `ultralytics`, `opencv-python`, `numpy`
+- `yolov8n.pt` placed in the project root
+
+---
+
+## How to Run
+
+**Step 0 — Verify conflict cases before any matrix run (no CARLA needed):**
 ```bash
-python run_single.py     # ดีบัก 1 เคส มีภาพ — แก้ SINGLE_* ใน config
-python run_matrix.py     # ไล่ 32 เคส × สมองกล → results/matrix_*.csv + สรุป
+python tools/check_conflict.py
+LEAD_DECEL=6.0 python tools/check_conflict.py   # verify with paper deceleration
 ```
 
-## กลไกความต่าง 20% — สลับได้ 2 ทาง
+**Scenario 1 — Cut-in / Dart-out:**
+```bash
+python run_single.py     # debug single case with display; edit SINGLE_* in config/scenario_cutin.py
+python run_matrix.py     # sweep 50 cases × 3 controllers → results/matrix_*.csv
+```
 
-ใน `config.MATRIX_RUNS` กำหนดได้ว่าจะเทียบอะไรกับอะไร:
+**Scenario 2 — Lead-brake (CCRb):**
+```bash
+python run_single_lead.py                    # debug single case with display
+LEAD_DECEL=6.0 python run_matrix_lead.py    # Euro-NCAP CCRb §3.4 — value used in paper (Table III/IV)
+python run_matrix_lead.py                    # code default LEAD_DECEL=4.0 (moderate braking)
+```
 
-1. **เปลี่ยนสมองกล** (เชิงอัลกอริทึม): `controller="baseline"` vs `"proposed"`
-   proposed ยก TTD threshold ขึ้นเมื่อเร็ว/ลื่น → เบรกล่วงหน้า → รอดในเคสวิกฤต
-2. **เปลี่ยนหน่วงเฟรม** (เชิง latency): `delay_frames=16` vs `0`
-   เลียนระบบรับรู้ช้า (16f ≈ 0.8s) เทียบกับเร็ว
+**Summarise results from existing CSVs (no CARLA needed):**
+```bash
+python core/report.py results/matrix_*.csv
+python core/report.py results/lead_matrix_*.csv
+```
 
-ค่า default เทียบ baseline vs proposed ที่ delay 0 ทั้งคู่ (โชว์ผลของอัลกอริทึมล้วน)
+> Lead-brake results are prefixed `lead_matrix_` (set by `RESULTS_PREFIX`), clearly separated from cut-in results (`matrix_`).
 
-## 5 ดัชนี CPEIM ที่ log (จากเปเปอร์ Sensors 2025)
+---
 
-`s` (clearance), `a_b` (MFDD), `T_c` (warning lead = TTC ตอนเริ่มเบรก),
-`Δv` (speed variation), `R_c` (อัตราหลบชนรวมทั้ง matrix)
+## Test Matrix
 
-> หมายเหตุ: ระยะ/TTC ที่ป้อนสมองกลเป็น **ground-truth จาก CARLA** (สะอาด ทำซ้ำได้)
-> YOLO ทำหน้าที่ตัวตรวจจับว่ามีรถในเลนเท่านั้น `s` เป็นระยะ center-to-center
+| Scenario | Variable | Values |
+|---|---|---|
+| Cut-in | `ego_speed_kmh` | 20, 30, 40, 50, 60 km/h |
+| Cut-in | `trigger_d` (Δd) | 20, 25, 30, 35, 40 m |
+| Cut-in | `mu` | 0.85 (dry), 0.40 (wet) |
+| Cut-in | `dart_speed_kmh` | 20 km/h (fixed) |
+| Lead-brake | `ego_speed_kmh` | 20, 30, 40, 50, 60 km/h |
+| Lead-brake | `HEADWAY_THW` | 1.0, 1.5, 2.0, 2.5, 3.0 s |
+| Lead-brake | `mu` | 0.85 (dry), 0.40 (wet) |
 
-## จุดจูนหลัก (ทั้งหมดอยู่ใน config)
+**Case count:** 50 cases/controller × 3 controllers = **150 runs per scenario**.
 
-- `MATRIX` — ตัวแปรทดสอบ (speed × μ × Δd × dart_speed)
-- `DYN_K_SPEED`, `DYN_K_MU`, `DYN_V0`, `DYN_MU0` — ความก้าวร้าวของ proposed
-- `TTC_BRAKE_FULL`, `TTC_WARN_FULL` — threshold ของ baseline
-- `LANE_LEFT/RIGHT`, `MIN_BOX_H` — แถบเลนพิกเซล + ระยะวิกฤตของ YOLO
-- `DART_STOP_X`, `DART_SPAWN`, `EGO_SPAWN` — เรขาคณิตฉาก (จากต้นแบบ scene03)
+---
 
-## เพิ่มสมองกลใหม่ในอนาคต
+## Controllers
 
-สร้างไฟล์ใน `control/` สืบทอด `BaseController` ใส่ `@register("ชื่อ")`
-แล้วเพิ่มชื่อใน `MATRIX_RUNS` — ไม่ต้องแตะโค้ดฉากหรือ metric เลย
-interface รองรับ `steer` แล้ว (ไว้ทำ evasive maneuver)
+| Code name | Paper name | File |
+|---|---|---|
+| `baseline` | Static TTC | `control/baseline_static_ttc.py` |
+| `proposed` | Adaptive TTC | `control/proposed_dynamic_ttc.py` |
+| `proposed_enhanced` | Required-Deceleration | `control/proposed_enhanced.py` |
+
+All controllers receive the same `Perception`/`EgoState` inputs; differences arise purely from decision logic.
+
+---
+
+## Key Parameters
+
+All parameters live in `config/scenario_cutin.py` or `config/scenario_lead_brake.py`. The most commonly tuned:
+
+| Parameter | Default | Meaning |
+|---|---|---|
+| `LEAD_DECEL` | `4.0` m/s² (env var override) | Lead vehicle braking deceleration; paper uses **6.0** (`LEAD_DECEL=6.0 python ...`) |
+| `TTC_WARN_FULL` | `1.6` s | Partial-brake TTC threshold (baseline & proposed) |
+| `TTC_BRAKE_FULL` | `0.6` s | Full-brake TTC threshold (baseline & proposed) |
+| `PARTIAL_BRAKE` | `0.4` | Partial brake fraction (all controllers) |
+| `DYN_K_SPEED` | `1.2` | Speed sensitivity for adaptive TTC |
+| `DYN_K_MU` | `1.5` | Friction sensitivity for adaptive TTC |
+| `REQ_FULL_FRAC` | `0.9` | Required-decel full-brake urgency threshold |
+| `REQ_WARN_FRAC` | `0.6` | Required-decel partial-brake urgency threshold |
+| `DETECTION_SOURCE` | `"groundtruth"` | `"groundtruth"` or `"yolo"` — controls brake gating |
+| `FIXED_DT` | `0.05` s | Sync-mode timestep (20 FPS) |
+| `MAX_TICKS` | `400` | Max ticks per run (= 20 s) |
+
+---
+
+## Adding a New Controller
+
+1. Create a file in `control/` that inherits `BaseController` and uses `@register("name")`.
+2. Implement `reset()` and `decide(perc, ego) -> carla.VehicleControl`.
+3. Add `dict(label="name", controller="name", delay_frames=0)` to `MATRIX_RUNS` in the relevant config file.
+
+No changes to scenario logic or metrics are needed. The controller works with both scenarios automatically.
+
+---
+
+## Output
+
+Results are written to `results/`:
+- `matrix_*.csv` — cut-in runs
+- `lead_matrix_*.csv` — lead-brake runs (prefixed by `RESULTS_PREFIX`)
+
+Key CSV columns: `label`, `controller`, `ego_speed_kmh`, `mu`, `avoided`, `s_clearance` (surface gap, m), `a_b_mfdd` (MFDD, m/s²), `t_c_warn` (TTC at brake onset, s), `dv_speed_var` (Δv, km/h), `is_conflict`, `peak_decel`, `a_max`.
+
+Run `python core/report.py results/*.csv` for a per-controller CPEIM summary table.

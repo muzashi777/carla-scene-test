@@ -1,0 +1,103 @@
+{
+  "generated": "20260613_175303",
+  "detector": {
+    "model": "yolov8n.pt",
+    "device": "cpu",
+    "conf_threshold": 0.45,
+    "iou_threshold": 0.45,
+    "target_classes": [
+      0,
+      1,
+      2,
+      3,
+      5,
+      7,
+      9,
+      11
+    ],
+    "target_class_names": {
+      "0": "person",
+      "1": "bicycle",
+      "2": "car",
+      "3": "motorcycle",
+      "5": "bus",
+      "7": "truck",
+      "9": "traffic light",
+      "11": "stop sign"
+    },
+    "img_width": 1280,
+    "img_height": 720,
+    "fov_deg": 90.0
+  },
+  "sampling": {
+    "mode": "meters",
+    "every_m": 1.0,
+    "every_frames": 5,
+    "drive_kmh": 30.0,
+    "trajectory": {
+      "start_y": -8.7,
+      "end_y": -56.0,
+      "ego_x": 3.02,
+      "ego_yaw": -90
+    }
+  },
+  "note": "raw detections + confidence only; no ground-truth labels in the reconstructed 3DGS scene, so NO precision/recall/accuracy is computed.",
+  "passes": [
+    {
+      "pass_type": "background",
+      "n_frames_sampled": 38,
+      "n_detections": 99,
+      "per_class": {
+        "car": {
+          "count": 96,
+          "mean_conf": 0.6363,
+          "median_conf": 0.6386,
+          "min_conf": 0.4583,
+          "max_conf": 0.8793
+        },
+        "traffic light": {
+          "count": 1,
+          "mean_conf": 0.8174,
+          "median_conf": 0.8174,
+          "min_conf": 0.8174,
+          "max_conf": 0.8174
+        },
+        "truck": {
+          "count": 2,
+          "mean_conf": 0.5195,
+          "median_conf": 0.5195,
+          "min_conf": 0.4974,
+          "max_conf": 0.5417
+        }
+      }
+    },
+    {
+      "pass_type": "with_actor",
+      "n_frames_sampled": 38,
+      "n_detections": 112,
+      "per_class": {
+        "car": {
+          "count": 109,
+          "mean_conf": 0.6344,
+          "median_conf": 0.637,
+          "min_conf": 0.4543,
+          "max_conf": 0.9238
+        },
+        "traffic light": {
+          "count": 1,
+          "mean_conf": 0.6646,
+          "median_conf": 0.6646,
+          "min_conf": 0.6646,
+          "max_conf": 0.6646
+        },
+        "truck": {
+          "count": 2,
+          "mean_conf": 0.5068,
+          "median_conf": 0.5068,
+          "min_conf": 0.5039,
+          "max_conf": 0.5097
+        }
+      }
+    }
+  ]
+}

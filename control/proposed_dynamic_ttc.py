@@ -19,26 +19,22 @@ class ProposedDynamicTTC(BaseController):
         self.k_speed = cfg.DYN_K_SPEED
         self.k_mu = cfg.DYN_K_MU
         self.partial = cfg.PARTIAL_BRAKE
-        self._latched = False
-
-    def reset(self):
-        self._latched = False
+        self.reset()
 
     def _dynamic_full(self, ego):
         bump = (self.k_speed * max(0.0, (ego.speed_kmh - self.v0) / 100.0)
                 + self.k_mu * max(0.0, (self.mu0 - ego.mu)))
         return self.base_full + bump
 
-    def decide(self, perc, ego):
-        if self._latched:
-            return self.control(brake=1.0)
-        if not perc.detected:
-            return self.control(throttle=0.6)
+    def _desired(self, perc, ego):
         thr_full = self._dynamic_full(ego)
         thr_warn = max(self.base_warn, thr_full + 0.5)
         if perc.ttc <= thr_full:
-            self._latched = True
-            return self.control(brake=1.0)
+            return 1.0
         if perc.ttc <= thr_warn:
-            return self.control(brake=self.partial)
-        return self.control(throttle=0.6)
+            return self.partial
+        return 0.0
+
+    def decide(self, perc, ego):
+        desired = self._desired(perc, ego) if (perc.detected or self._engaged) else 0.0
+        return self._emit(desired)
