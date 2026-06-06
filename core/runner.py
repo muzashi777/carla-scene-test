@@ -53,7 +53,8 @@ def run_case(sess, cfg, case, controller_name, delay_frames, detector, viz=None)
 
         # ── กล้องหน้า (ให้ YOLO) ──
         cam = actors.attach_rgb_camera(world, ego, cfg.CAM_FRONT_TF,
-                                       cfg.CAM_W, cfg.CAM_H, lambda i: front_q.put(i))
+                                       cfg.CAM_W, cfg.CAM_H, lambda i: front_q.put(i),
+                                       fov=cfg.CAM_FOV_DEG)
         actor_list.append(cam)
         # ── กล้อง top view (เฉพาะตอนโชว์ภาพ) ──
         if viz is not None:
@@ -215,7 +216,9 @@ def run_case(sess, cfg, case, controller_name, delay_frames, detector, viz=None)
             if viz is not None:
                 ov = [f"{controller_name} delay={delay_frames}f | v {v_kmh:.0f} | gap {gap:.1f}m ttc {ttc:.2f}",
                       f"{'BRAKE!' if brake_engaged else 'cruising'} | det[{src}]: {perceived} (lon {lon:.1f} lat {lat:.1f})"]
-                last_frame, q = viz.frame(frame, detector.last_results, ov, img_top)
+                hazard = {"camera": cam, "actor": dart, "in_path": gt_now,
+                          "engaged": brake_engaged, "lon": lon, "lat": lat, "ttc": ttc}
+                last_frame, q = viz.frame(frame, detector.last_results, ov, img_top, hazard)
                 if q:
                     result_txt = "QUIT"; quit_flag = True; break
 

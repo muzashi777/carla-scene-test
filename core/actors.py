@@ -110,11 +110,13 @@ def hold(vehicle):
     vehicle.apply_control(carla.VehicleControl(brake=1.0, hand_brake=True))
 
 
-def attach_rgb_camera(world, parent, tf_dict, w, h, sink):
+def attach_rgb_camera(world, parent, tf_dict, w, h, sink, fov=None):
     """ติดกล้อง RGB เข้ากับ parent แล้วส่งภาพไป sink (เช่น queue.put)"""
     bp = world.get_blueprint_library().find("sensor.camera.rgb")
     bp.set_attribute("image_size_x", str(w))
     bp.set_attribute("image_size_y", str(h))
+    if fov is not None:
+        bp.set_attribute("fov", str(fov))
     rot = carla.Rotation(
         pitch=tf_dict.get("pitch", 0.0),
         yaw=tf_dict.get("yaw", 0.0),
