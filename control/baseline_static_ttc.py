@@ -14,19 +14,16 @@ class BaselineStaticTTC(BaseController):
         self.ttc_warn = cfg.TTC_WARN_FULL
         self.ttc_full = cfg.TTC_BRAKE_FULL
         self.partial = cfg.PARTIAL_BRAKE
-        self._latched = False     # เบรกแล้วเบรกค้าง (ไม่ปล่อย)
+        self.reset()
 
-    def reset(self):
-        self._latched = False
+    def _desired(self, perc):
+        if perc.ttc <= self.ttc_full:
+            return 1.0
+        if perc.ttc <= self.ttc_warn:
+            return self.partial
+        return 0.0
 
     def decide(self, perc, ego):
-        if self._latched:
-            return self.control(brake=1.0)
-        if not perc.detected:
-            return self.control(throttle=0.6)   # ขับต่อ (run loop เป็นคนรักษาความเร็วจริง)
-        if perc.ttc <= self.ttc_full:
-            self._latched = True
-            return self.control(brake=1.0)
-        if perc.ttc <= self.ttc_warn:
-            return self.control(brake=self.partial)
-        return self.control(throttle=0.6)
+        # คิด desired เฉพาะเมื่อเห็นอันตราย หรือเคยเริ่มเบรกแล้ว (latch ค้าง)
+        desired = self._desired(perc) if (perc.detected or self._engaged) else 0.0
+        return self._emit(desired)

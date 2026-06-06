@@ -193,8 +193,9 @@ def run_case(sess, cfg, case, controller_name, delay_frames, detector, viz=None)
                     ego.set_target_velocity(carla.Vector3D(f.x * new_v, f.y * new_v, 0.0))
                 else:
                     ego.apply_control(ctrl)
-            else:
-                scen.cruise_ego()   # รักษาความเร็ว (open-loop)
+            elif not brake_engaged:
+                scen.cruise_ego()   # รักษาความเร็ว (เฉพาะตอนยังไม่เริ่มเบรก)
+            # ถ้า engaged แล้วแต่ controller ไม่สั่งเบรก (ไม่ควรเกิดเพราะ latch) → ปล่อยไหล ไม่รีเซ็ตความเร็ว
 
             # ── ติดตาม MFDD + ความหน่วงทันที/สูงสุด ──
             v_ms = actors.speed_ms(ego)

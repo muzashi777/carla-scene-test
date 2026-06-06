@@ -12,8 +12,9 @@ class BaseController:
     name = "base"
 
     def reset(self):
-        """เรียกก่อนเริ่มแต่ละเคส — เคลียร์ state ภายใน (เช่น latch)"""
-        pass
+        """เรียกก่อนเริ่มแต่ละเคส — เคลียร์ latch ภายใน"""
+        self._engaged = False     # เคยสั่งเบรกแล้วหรือยัง
+        self._brake_held = 0.0    # แรงเบรกที่ค้างไว้ (ไม่ลดลง)
 
     def decide(self, perc: Perception, ego: EgoState) -> carla.VehicleControl:
         """รับสิ่งที่มองเห็น + สถานะรถ → คืนคำสั่งคุมรถ (throttle/brake/steer)"""
@@ -25,6 +26,23 @@ class BaseController:
         return carla.VehicleControl(
             throttle=float(throttle), brake=float(brake), steer=float(steer)
         )
+
+    def _latch_brake(self, desired):
+        """
+        latch การเบรก: พอเริ่มเบรกแล้ว 'ค้าง' ไม่กลับไปปล่อยคันเร่งอีก
+        และแรงเบรกเพิ่มได้ (partial→full) แต่ไม่ลดลง → กัน ttc เด้งขึ้นแล้วเลิกเบรก
+        """
+        if desired > 0.0:
+            self._engaged = True
+        if self._engaged:
+            self._brake_held = max(self._brake_held, desired)
+            return self._brake_held
+        return 0.0
+
+    def _emit(self, desired):
+        """แปลง desired brake (ผ่าน latch) เป็น VehicleControl"""
+        b = self._latch_brake(desired)
+        return self.control(brake=b) if b > 0.0 else self.control(throttle=0.6)
 
 
 # ── registry: map ชื่อ → คลาส (run scripts เรียกผ่านนี้) ───────────
