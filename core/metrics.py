@@ -34,6 +34,8 @@ class RunRecord:
     t_c_warn: float = 0.0          # s
     dv_speed_var: float = 0.0      # km/h
     collision_speed_kmh: float = 0.0
+    peak_decel: float = 0.0        # m/s² ความหน่วงสูงสุดที่วัดได้ขณะเบรก
+    brake_distance: float = 0.0    # m ระยะตั้งแต่เริ่มเบรกจนหยุด
     min_dist: float = 0.0
     result_txt: str = ""
 

@@ -112,6 +112,8 @@ def run_case(sess, cfg, case, controller_name, delay_frames, detector, viz=None)
         stopped = False
         min_dist = 1e9
         min_gap = 1e9
+        peak_decel = 0.0
+        prev_v_ms = actors.speed_ms(ego)
         result_txt = "TIMEOUT"
         last_frame = None
         quit_flag = False
@@ -187,12 +189,18 @@ def run_case(sess, cfg, case, controller_name, delay_frames, detector, viz=None)
             else:
                 scen.cruise_ego()   # รักษาความเร็ว (open-loop)
 
-            # ── ติดตาม MFDD ──
+            # ── ติดตาม MFDD + ความหน่วงทันที/สูงสุด ──
+            v_ms = actors.speed_ms(ego)
+            inst_decel = (prev_v_ms - v_ms) / cfg.FIXED_DT
+            prev_v_ms = v_ms
+            if brake_engaged and inst_decel > peak_decel:
+                peak_decel = inst_decel
             mfdd.update(v_kmh, abs(ego_y - ego_y0))
 
-            if tick % cfg.LOG_EVERY == 0:
+            if tick % cfg.LOG_EVERY == 0 or brake_engaged:
                 print(f"t={tick*cfg.FIXED_DT:5.2f}s | ego_y={ego_y:6.1f} "
                       f"v={v_kmh:5.1f} gap={gap:5.1f}m (d={d:4.1f}) ttc={ttc:5.2f} "
+                      f"decel={inst_decel:5.2f} "
                       f"{'BRAKE' if brake_engaged else 'cruise'} det={perceived}")
 
             # ── โชว์ภาพ (ถ้ามี viz) ──
@@ -214,6 +222,8 @@ def run_case(sess, cfg, case, controller_name, delay_frames, detector, viz=None)
                 result_txt = "AVOIDED"
                 rec.avoided = True
                 rec.s_clearance = gap
+                if brake_info:
+                    rec.brake_distance = abs(brake_info[3] - ego_y)
                 break
             if ego_y < cfg.END_Y:
                 result_txt = "NO BRAKE / passed"
@@ -223,6 +233,7 @@ def run_case(sess, cfg, case, controller_name, delay_frames, detector, viz=None)
         rec.result_txt = result_txt
         rec.min_dist = min_dist
         rec.a_b_mfdd = mfdd.mfdd()
+        rec.peak_decel = peak_decel
         if brake_info:
             rec.t_c_warn = 0.0 if math.isinf(brake_info[4]) else brake_info[4]
             v_at_brake = brake_info[2]
@@ -236,8 +247,10 @@ def run_case(sess, cfg, case, controller_name, delay_frames, detector, viz=None)
         if brake_info:
             print(f"  เริ่มเบรก tick={brake_info[0]} gap={brake_info[1]:.1f}m "
                   f"v={brake_info[2]:.1f} ttc={rec.t_c_warn:.2f}s")
-        print(f"  s={rec.s_clearance:.2f}m a_b={rec.a_b_mfdd:.2f} "
-              f"Δv={rec.dv_speed_var:.1f} min_gap={min_gap:.1f}m (min_dist={min_dist:.1f}m)")
+        print(f"  s={rec.s_clearance:.2f}m a_b(MFDD)={rec.a_b_mfdd:.2f} "
+              f"peak_decel={rec.peak_decel:.2f} brake_dist={rec.brake_distance:.2f}m")
+        print(f"  μ={case['mu']} → ความหน่วงสูงสุดที่ทฤษฎีให้ได้ ≈ μ·g = {case['mu']*cfg.GRAVITY:.2f} m/s²")
+        print(f"  Δv={rec.dv_speed_var:.1f} min_gap={min_gap:.1f}m (min_dist={min_dist:.1f}m)")
         print("=" * 60)
 
         return rec, (last_frame, result_txt, quit_flag)

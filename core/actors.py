@@ -58,14 +58,19 @@ def spawn_vehicle(world, x, y, z, yaw, model="vehicle.*"):
     return world.try_spawn_actor(bp, tf)
 
 
-def set_friction(vehicle, mu):
-    """ตั้งค่าความลื่นถนน μ ผ่าน tire_friction ของทุกล้อ (ใช้แทนการตั้งใน .xodr)"""
+def set_friction(vehicle, mu, verbose=True):
+    """ตั้งค่าความลื่นถนน μ ผ่าน tire_friction ของทุกล้อ; อ่านกลับมายืนยัน คืน list ค่าจริง"""
     pc = vehicle.get_physics_control()
     wheels = pc.wheels
     for w in wheels:
         w.tire_friction = float(mu)
     pc.wheels = wheels
     vehicle.apply_physics_control(pc)
+    # อ่านกลับจาก physics control เพื่อยืนยันว่า CARLA รับค่าจริง
+    readback = [round(w.tire_friction, 3) for w in vehicle.get_physics_control().wheels]
+    if verbose:
+        print(f"[FRICTION] ตั้ง μ={mu} → tire_friction จริงต่อล้อ = {readback}")
+    return readback
 
 
 def cruise(vehicle, target_ms):
