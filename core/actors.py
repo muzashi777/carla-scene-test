@@ -58,18 +58,39 @@ def spawn_vehicle(world, x, y, z, yaw, model="vehicle.*"):
     return world.try_spawn_actor(bp, tf)
 
 
+def _wheel_friction_attr(wheel):
+    """หาชื่อ attribute แรงเสียดทานบนล้อ (ต่างกันตามเวอร์ชัน CARLA)"""
+    for name in ("tire_friction", "friction", "lateral_friction", "longitudinal_friction"):
+        if hasattr(wheel, name):
+            return name
+    for name in dir(wheel):
+        if "friction" in name.lower() and not name.startswith("_"):
+            return name
+    return None
+
+
 def set_friction(vehicle, mu, verbose=True):
-    """ตั้งค่าความลื่นถนน μ ผ่าน tire_friction ของทุกล้อ; อ่านกลับมายืนยัน คืน list ค่าจริง"""
+    """ตั้งความลื่นถนน μ ที่ล้อ; auto-detect ชื่อ attr ตามเวอร์ชัน CARLA, อ่านกลับยืนยัน"""
     pc = vehicle.get_physics_control()
     wheels = pc.wheels
+    if not wheels:
+        if verbose:
+            print("[FRICTION] ⚠ รถไม่มีข้อมูลล้อใน physics control")
+        return None
+    attr = _wheel_friction_attr(wheels[0])
+    if attr is None:
+        avail = [a for a in dir(wheels[0]) if not a.startswith("_")]
+        if verbose:
+            print("[FRICTION] ⚠ ไม่พบ attribute แรงเสียดทานบนล้อ — μ ไม่ถูกตั้ง!")
+            print(f"[FRICTION] attribute ที่ล้อมีให้: {avail}")
+        return None
     for w in wheels:
-        w.tire_friction = float(mu)
+        setattr(w, attr, float(mu))
     pc.wheels = wheels
     vehicle.apply_physics_control(pc)
-    # อ่านกลับจาก physics control เพื่อยืนยันว่า CARLA รับค่าจริง
-    readback = [round(w.tire_friction, 3) for w in vehicle.get_physics_control().wheels]
+    readback = [round(getattr(w, attr), 3) for w in vehicle.get_physics_control().wheels]
     if verbose:
-        print(f"[FRICTION] ตั้ง μ={mu} → tire_friction จริงต่อล้อ = {readback}")
+        print(f"[FRICTION] ใช้ attr '{attr}' ตั้ง μ={mu} → อ่านกลับต่อล้อ = {readback}")
     return readback
 
 
