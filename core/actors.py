@@ -91,6 +91,10 @@ def set_friction(vehicle, mu, verbose=True):
     readback = [round(getattr(w, attr), 3) for w in vehicle.get_physics_control().wheels]
     if verbose:
         print(f"[FRICTION] ใช้ attr '{attr}' ตั้ง μ={mu} → อ่านกลับต่อล้อ = {readback}")
+        target = round(float(mu), 3)
+        if not all(abs(r - target) < 1e-3 for r in readback):
+            print("[FRICTION] ⚠ ค่าไม่ติด/ไม่ตรง — physics ไม่รับ μ ผ่าน path นี้")
+            print("[FRICTION]   แนะนำตั้ง BRAKE_MODEL='kinematic' ใน config (คุม μ ตรงๆ)")
     return readback
 
 

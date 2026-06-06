@@ -185,13 +185,20 @@ def run_case(sess, cfg, case, controller_name, delay_frames, detector, viz=None)
                 if not brake_engaged:
                     brake_engaged = True
                     brake_info = (tick, gap, v_kmh, ego_y, ttc)
-                ego.apply_control(ctrl)
+                if cfg.BRAKE_MODEL == "kinematic":
+                    # ความหน่วง = แรงเบรก × μ × g (จำกัดตามแรงเสียดทานจริงตามทฤษฎี)
+                    decel_cmd = ctrl.brake * case["mu"] * cfg.GRAVITY
+                    new_v = max(0.0, actors.speed_ms(ego) - decel_cmd * cfg.FIXED_DT)
+                    f = ego.get_transform().get_forward_vector()
+                    ego.set_target_velocity(carla.Vector3D(f.x * new_v, f.y * new_v, 0.0))
+                else:
+                    ego.apply_control(ctrl)
             else:
                 scen.cruise_ego()   # รักษาความเร็ว (open-loop)
 
             # ── ติดตาม MFDD + ความหน่วงทันที/สูงสุด ──
             v_ms = actors.speed_ms(ego)
-            inst_decel = (prev_v_ms - v_ms) / cfg.FIXED_DT
+            inst_decel = (prev_v_ms - v_ms) / cfg.FIXED_DT if tick > 0 else 0.0
             prev_v_ms = v_ms
             if brake_engaged and inst_decel > peak_decel:
                 peak_decel = inst_decel

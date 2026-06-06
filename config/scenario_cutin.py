@@ -70,6 +70,13 @@ FRAME_SYNC = True          # True = อ่านภาพจนกว่า fram
 AUTO_GAP_OFFSET = True     # True = คำนวณจาก bounding box อัตโนมัติ (ego ยาว + dart กว้าง)
 GAP_OFFSET = 3.2           # ใช้ค่านี้เมื่อ AUTO_GAP_OFFSET=False (ม.)
 
+# ── โมเดลการเบรก ──
+#   "kinematic" = คุมความหน่วง = brake × μ × g ตรงๆ ผ่าน set_target_velocity
+#                 → μ เป็นตัวแปรทดสอบจริง ทำซ้ำได้ ตรงสูตร v²/2μg (แนะนำ)
+#   "physics"   = ส่ง apply_control(brake) ให้ tire model ของ CARLA จัดการ
+#                 (ใช้ได้ถ้า CARLA 0.9.x รับ tire_friction; 0.10/Chrono มักไม่รับ μ)
+BRAKE_MODEL = "kinematic"
+
 # ── ความลื่นถนน μ (ตั้งที่ tire_friction ของล้อ) ───────────────────
 MU_DRY = 0.85
 MU_WET = 0.40
