@@ -151,9 +151,10 @@ def run_case(sess, cfg, case, controller_name, delay_frames, detector, viz=None)
             # YOLO: วาดบนจอเสมอ (ดีบัก/สมจริง)
             frame = detector.carla_image_to_bgr(img)
             yolo_now, in_band, box_h = detector.detect(frame)
-            # ground-truth: dart อยู่ในทางเดินข้างหน้า ego ไหม
+            # ground-truth: dart อยู่/กำลังเข้าทางเดินข้างหน้า ego ไหม (predictive)
             gt_now, lon, lat = actors.inpath_hazard(
-                ego, dart, cfg.INPATH_MAX_RANGE, cfg.INPATH_HALF_WIDTH)
+                ego, dart, cfg.INPATH_MAX_RANGE, cfg.INPATH_HALF_WIDTH,
+                cfg.INPATH_LOOKAHEAD if cfg.INPATH_PREDICT else 0.0)
 
             # เลือกเกตที่ใช้ตัดสินใจเบรกตาม DETECTION_SOURCE
             src = cfg.DETECTION_SOURCE

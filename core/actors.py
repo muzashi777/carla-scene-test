@@ -31,9 +31,10 @@ def grab_synced(q, frame_id, timeout=2.0):
             return img
 
 
-def inpath_hazard(ego, other, max_range, half_width):
+def inpath_hazard(ego, other, max_range, half_width, lookahead=0.0):
     """
-    เช็กจาก ground-truth ว่า 'other' อยู่ในทางเดินข้างหน้า ego ไหม
+    เช็กจาก ground-truth ว่า 'other' อยู่/กำลังเข้าทางเดินข้างหน้า ego ไหม
+    lookahead>0 = เปิด predictive: ใช้ความเร็วด้านข้างของ other ทำนายการเข้าเลน
     คืน (in_path, lon, lat): lon=ระยะตามแนวหน้า(>0=ข้างหน้า), lat=ระยะเยื้องข้าง
     """
     e = ego.get_transform()
@@ -43,8 +44,16 @@ def inpath_hazard(ego, other, max_range, half_width):
     dx, dy = lo.x - le.x, lo.y - le.y
     lon = dx * f.x + dy * f.y
     lat = dx * r.x + dy * r.y
-    in_path = (0.0 < lon <= max_range) and (abs(lat) <= half_width)
-    return in_path, lon, lat
+    ahead = (0.0 < lon <= max_range)
+    cur = ahead and (abs(lat) <= half_width)        # อยู่ในเลนแล้วจริง
+    pred = False
+    if lookahead > 0.0 and ahead:
+        ov = other.get_velocity()
+        lat_vel = ov.x * r.x + ov.y * r.y           # ความเร็วด้านข้างของ other
+        entering = (lat * lat_vel < 0.0)            # กำลังวิ่งเข้าหากึ่งกลางเลน
+        lat_future = lat + lat_vel * lookahead
+        pred = entering and (abs(lat_future) <= half_width)
+    return (cur or pred), lon, lat
 
 
 def spawn_vehicle(world, x, y, z, yaw, model="vehicle.*"):

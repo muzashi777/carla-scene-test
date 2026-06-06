@@ -61,6 +61,12 @@ DETECTION_SOURCE = "groundtruth"
 INPATH_HALF_WIDTH = 1.8    # ครึ่งความกว้างเลน (m) — |ระยะข้าง| ≤ ค่านี้ = อยู่ในเลน
 INPATH_MAX_RANGE  = 40.0   # มองไปข้างหน้าไกลสุด (m)
 
+# ── predictive corridor (เห็น dart ตั้งแต่ "กำลังเข้าเลน" ไม่รอจนเข้าเต็มตัว) ──
+# ใช้ความเร็วด้านข้างของ dart ทำนายว่าจะเข้า corridor ภายใน lookahead วินาทีไหม
+# ทำให้ทั้ง baseline/proposed มี detection lead พอ → dynamic TTC ของ proposed ได้ทำงาน
+INPATH_PREDICT   = True
+INPATH_LOOKAHEAD = 1.5     # วินาที มองล่วงหน้าว่า dart จะเข้าเลนไหม
+
 # ── การจับคู่เฟรมกล้องกับ snapshot โลก (กันภาพดริฟต์ใน sync mode) ──
 FRAME_SYNC = True          # True = อ่านภาพจนกว่า frame id ตรงกับ world.tick()
 
@@ -101,7 +107,7 @@ SHOW_WINDOW = True                # โชว์หน้าต่าง OpenCV 
 MATRIX = dict(
     ego_speed_kmh = [30.0, 40.0, 50.0, 60.0],
     mu            = [MU_DRY, MU_WET],
-    trigger_d     = [10.0, 15.0, 20.0, 25.0],
+    trigger_d     = [20.0, 25.0, 30.0, 35.0],   # ตัด 10/15 ที่หินเกินจนไม่มีใครรอด
     dart_speed_kmh= [20.0],          # คงที่ก่อน (เพิ่มเป็น [20,40] ได้ถ้าอยากขยาย)
 )
 # จะรันสมองกลคู่ไหนมาเทียบกัน + หน่วงเฟรมของแต่ละตัว
