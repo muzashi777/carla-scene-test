@@ -89,12 +89,29 @@ def run_case(sess, cfg, case, controller_name, delay_frames, detector, viz=None)
         det_buffer = deque(maxlen=delay_frames + 1)
         mfdd = MfddTracker(case["ego_speed_kmh"])
         ego_y0 = ego.get_location().y
-        prev_dist = actors.dist2d(ego, dart)
+
+        # ── ระยะ "ผิวถึงผิว" = ระยะศูนย์กลาง − ขนาดตัวรถ ──
+        # dist2d เป็นระยะจุดศูนย์กลาง การชนจริงเกิดเมื่อกันชนแตะ (gap≈0)
+        # dart พุ่งมาขวางตั้งฉาก → ด้านที่หันเข้า ego คือด้านข้าง (extent.y)
+        if cfg.AUTO_GAP_OFFSET:
+            try:
+                gap_offset = ego.bounding_box.extent.x + dart.bounding_box.extent.y
+            except Exception:
+                gap_offset = cfg.GAP_OFFSET
+        else:
+            gap_offset = cfg.GAP_OFFSET
+        print(f"[GAP] gap_offset = {gap_offset:.2f} m (หักขนาดตัวรถออกจากระยะศูนย์กลาง)")
+
+        def surface_gap(dc):
+            return max(0.0, dc - gap_offset)
+
+        prev_gap = surface_gap(actors.dist2d(ego, dart))
 
         brake_engaged = False
-        brake_info = None        # (tick, dist, v_kmh, ego_y, ttc)
+        brake_info = None        # (tick, gap, v_kmh, ego_y, ttc)
         stopped = False
         min_dist = 1e9
+        min_gap = 1e9
         result_txt = "TIMEOUT"
         last_frame = None
         quit_flag = False
@@ -114,7 +131,9 @@ def run_case(sess, cfg, case, controller_name, delay_frames, detector, viz=None)
             ego_y = ego.get_location().y
             v_kmh = actors.speed_kmh(ego)
             d = actors.dist2d(ego, dart)
+            gap = surface_gap(d)
             min_dist = min(min_dist, d)
+            min_gap = min(min_gap, gap)
 
             # ── เช็กชน 'ทันที' หลังอ่านสถานะ (ก่อนเสีย YOLO/วาดภาพ) ──
             # ทำให้ break ไว และเฟรมที่ค้างไว้ = เฟรมตอนชนจริง
@@ -142,16 +161,16 @@ def run_case(sess, cfg, case, controller_name, delay_frames, detector, viz=None)
             else:  # "groundtruth"
                 detected_now = gt_now
 
-            # ── ระยะ/ความเร็วสัมพัทธ์ ground-truth → TTC ──
-            rel_speed = max(0.0, (prev_dist - d) / cfg.FIXED_DT)
-            prev_dist = d
-            ttc = (d / rel_speed) if rel_speed > 1e-3 else math.inf
+            # ── ระยะ/ความเร็วสัมพัทธ์ ground-truth (ผิวถึงผิว) → TTC ──
+            rel_speed = max(0.0, (prev_gap - gap) / cfg.FIXED_DT)
+            prev_gap = gap
+            ttc = (gap / rel_speed) if rel_speed > 1e-3 else math.inf
 
             # ── หน่วงเฟรมเฉพาะ detected (perception latency) ──
             det_buffer.append(detected_now)
             perceived = det_buffer[0]
 
-            perc = Perception(detected=perceived, distance=d,
+            perc = Perception(detected=perceived, distance=gap,
                               rel_speed=rel_speed, ttc=ttc, box_h=box_h)
             ego_state = EgoState(speed_ms=actors.speed_ms(ego),
                                  speed_kmh=v_kmh, mu=case["mu"])
@@ -163,7 +182,7 @@ def run_case(sess, cfg, case, controller_name, delay_frames, detector, viz=None)
             if is_braking:
                 if not brake_engaged:
                     brake_engaged = True
-                    brake_info = (tick, d, v_kmh, ego_y, ttc)
+                    brake_info = (tick, gap, v_kmh, ego_y, ttc)
                 ego.apply_control(ctrl)
             else:
                 scen.cruise_ego()   # รักษาความเร็ว (open-loop)
@@ -173,12 +192,12 @@ def run_case(sess, cfg, case, controller_name, delay_frames, detector, viz=None)
 
             if tick % cfg.LOG_EVERY == 0:
                 print(f"t={tick*cfg.FIXED_DT:5.2f}s | ego_y={ego_y:6.1f} "
-                      f"v={v_kmh:5.1f} d={d:5.1f}m ttc={ttc:5.2f} "
+                      f"v={v_kmh:5.1f} gap={gap:5.1f}m (d={d:4.1f}) ttc={ttc:5.2f} "
                       f"{'BRAKE' if brake_engaged else 'cruise'} det={perceived}")
 
             # ── โชว์ภาพ (ถ้ามี viz) ──
             if viz is not None:
-                ov = [f"{controller_name} delay={delay_frames}f | v {v_kmh:.0f} | d {d:.1f}m ttc {ttc:.2f}",
+                ov = [f"{controller_name} delay={delay_frames}f | v {v_kmh:.0f} | gap {gap:.1f}m ttc {ttc:.2f}",
                       f"{'BRAKE!' if brake_engaged else 'cruising'} | det[{src}]: {perceived} (lon {lon:.1f} lat {lat:.1f})"]
                 last_frame, q = viz.frame(frame, detector.last_results, ov, img_top)
                 if q:
@@ -194,7 +213,7 @@ def run_case(sess, cfg, case, controller_name, delay_frames, detector, viz=None)
                 stopped = True
                 result_txt = "AVOIDED"
                 rec.avoided = True
-                rec.s_clearance = d
+                rec.s_clearance = gap
                 break
             if ego_y < cfg.END_Y:
                 result_txt = "NO BRAKE / passed"
@@ -215,10 +234,10 @@ def run_case(sess, cfg, case, controller_name, delay_frames, detector, viz=None)
         print(f"RESULT [{controller_name} delay={delay_frames}f "
               f"v={case['ego_speed_kmh']:.0f} mu={case['mu']} Δd={case['trigger_d']:.0f}] : {result_txt}")
         if brake_info:
-            print(f"  เริ่มเบรก tick={brake_info[0]} d={brake_info[1]:.1f}m "
+            print(f"  เริ่มเบรก tick={brake_info[0]} gap={brake_info[1]:.1f}m "
                   f"v={brake_info[2]:.1f} ttc={rec.t_c_warn:.2f}s")
         print(f"  s={rec.s_clearance:.2f}m a_b={rec.a_b_mfdd:.2f} "
-              f"Δv={rec.dv_speed_var:.1f} min_dist={min_dist:.1f}m")
+              f"Δv={rec.dv_speed_var:.1f} min_gap={min_gap:.1f}m (min_dist={min_dist:.1f}m)")
         print("=" * 60)
 
         return rec, (last_frame, result_txt, quit_flag)

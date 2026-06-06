@@ -64,6 +64,12 @@ INPATH_MAX_RANGE  = 40.0   # มองไปข้างหน้าไกลส
 # ── การจับคู่เฟรมกล้องกับ snapshot โลก (กันภาพดริฟต์ใน sync mode) ──
 FRAME_SYNC = True          # True = อ่านภาพจนกว่า frame id ตรงกับ world.tick()
 
+# ── ระยะผิวถึงผิว (surface gap) ──
+# dist2d เป็นระยะจุดศูนย์กลาง รถยาวคันละ ~4.5 ม. การชนเกิดเมื่อกันชนแตะ
+# จึงหักขนาดตัวรถออกก่อนคำนวณ TTC/clearance ไม่งั้นสมองกลเบรกช้าไป ~2 ม.
+AUTO_GAP_OFFSET = True     # True = คำนวณจาก bounding box อัตโนมัติ (ego ยาว + dart กว้าง)
+GAP_OFFSET = 3.2           # ใช้ค่านี้เมื่อ AUTO_GAP_OFFSET=False (ม.)
+
 # ── ความลื่นถนน μ (ตั้งที่ tire_friction ของล้อ) ───────────────────
 MU_DRY = 0.85
 MU_WET = 0.40
