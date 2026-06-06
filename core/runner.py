@@ -207,7 +207,7 @@ def run_case(sess, cfg, case, controller_name, delay_frames, detector, viz=None)
             if tick % cfg.LOG_EVERY == 0 or brake_engaged:
                 print(f"t={tick*cfg.FIXED_DT:5.2f}s | ego_y={ego_y:6.1f} "
                       f"v={v_kmh:5.1f} gap={gap:5.1f}m (d={d:4.1f}) ttc={ttc:5.2f} "
-                      f"decel={inst_decel:5.2f} "
+                      f"bk={ctrl.brake:.2f} decel={inst_decel:5.2f} "
                       f"{'BRAKE' if brake_engaged else 'cruise'} det={perceived}")
 
             # ── โชว์ภาพ (ถ้ามี viz) ──
