@@ -71,11 +71,11 @@ def run_case(sess, cfg, case, controller_name, delay_frames, detector, viz=None)
 
         # ── ปล่อยให้ฉากนิ่ง ──
         for _ in range(cfg.SETTLE_TICKS):
-            world.tick()
+            wf = world.tick()
             try:
-                front_q.get(timeout=2.0)
+                actors.grab_synced(front_q, wf)
                 if viz is not None:
-                    top_q.get(timeout=2.0)
+                    actors.grab_synced(top_q, wf)
             except queue.Empty:
                 pass
 
@@ -100,10 +100,14 @@ def run_case(sess, cfg, case, controller_name, delay_frames, detector, viz=None)
         quit_flag = False
 
         for tick in range(cfg.MAX_TICKS):
-            world.tick()
+            wf = world.tick()
             try:
-                img = front_q.get(timeout=2.0)
-                img_top = top_q.get(timeout=2.0) if viz is not None else None
+                if cfg.FRAME_SYNC:
+                    img = actors.grab_synced(front_q, wf)
+                    img_top = actors.grab_synced(top_q, wf) if viz is not None else None
+                else:
+                    img = front_q.get(timeout=2.0)
+                    img_top = top_q.get(timeout=2.0) if viz is not None else None
             except queue.Empty:
                 continue
 
@@ -112,11 +116,31 @@ def run_case(sess, cfg, case, controller_name, delay_frames, detector, viz=None)
             d = actors.dist2d(ego, dart)
             min_dist = min(min_dist, d)
 
+            # ── เช็กชน 'ทันที' หลังอ่านสถานะ (ก่อนเสีย YOLO/วาดภาพ) ──
+            # ทำให้ break ไว และเฟรมที่ค้างไว้ = เฟรมตอนชนจริง
+            if collision["hit"]:
+                result_txt = f"COLLISION with {collision['with']}"
+                rec.collision_with = collision["with"]
+                rec.collision_speed_kmh = v_kmh
+
             scen.update()   # คุม dart (trigger/จอดขวาง)
 
-            # ── PERCEPTION: YOLO ──
+            # ── PERCEPTION ──
+            # YOLO: วาดบนจอเสมอ (ดีบัก/สมจริง)
             frame = detector.carla_image_to_bgr(img)
-            detected_now, in_band, box_h = detector.detect(frame)
+            yolo_now, in_band, box_h = detector.detect(frame)
+            # ground-truth: dart อยู่ในทางเดินข้างหน้า ego ไหม
+            gt_now, lon, lat = actors.inpath_hazard(
+                ego, dart, cfg.INPATH_MAX_RANGE, cfg.INPATH_HALF_WIDTH)
+
+            # เลือกเกตที่ใช้ตัดสินใจเบรกตาม DETECTION_SOURCE
+            src = cfg.DETECTION_SOURCE
+            if src == "yolo":
+                detected_now = yolo_now
+            elif src == "both_or":
+                detected_now = gt_now or yolo_now
+            else:  # "groundtruth"
+                detected_now = gt_now
 
             # ── ระยะ/ความเร็วสัมพัทธ์ ground-truth → TTC ──
             rel_speed = max(0.0, (prev_dist - d) / cfg.FIXED_DT)
@@ -155,7 +179,7 @@ def run_case(sess, cfg, case, controller_name, delay_frames, detector, viz=None)
             # ── โชว์ภาพ (ถ้ามี viz) ──
             if viz is not None:
                 ov = [f"{controller_name} delay={delay_frames}f | v {v_kmh:.0f} | d {d:.1f}m ttc {ttc:.2f}",
-                      f"{'BRAKE!' if brake_engaged else 'cruising'} | det(near in lane): {perceived}"]
+                      f"{'BRAKE!' if brake_engaged else 'cruising'} | det[{src}]: {perceived} (lon {lon:.1f} lat {lat:.1f})"]
                 last_frame, q = viz.frame(frame, detector.last_results, ov, img_top)
                 if q:
                     result_txt = "QUIT"; quit_flag = True; break

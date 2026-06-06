@@ -23,6 +23,30 @@ def dist2d(a, b):
     return math.hypot(la.x - lb.x, la.y - lb.y)
 
 
+def grab_synced(q, frame_id, timeout=2.0):
+    """อ่านภาพจากคิวจนกว่า image.frame ตรง/ใหม่กว่า frame_id (กันภาพดริฟต์ใน sync mode)"""
+    while True:
+        img = q.get(timeout=timeout)
+        if img.frame >= frame_id:
+            return img
+
+
+def inpath_hazard(ego, other, max_range, half_width):
+    """
+    เช็กจาก ground-truth ว่า 'other' อยู่ในทางเดินข้างหน้า ego ไหม
+    คืน (in_path, lon, lat): lon=ระยะตามแนวหน้า(>0=ข้างหน้า), lat=ระยะเยื้องข้าง
+    """
+    e = ego.get_transform()
+    f = e.get_forward_vector()
+    r = e.get_right_vector()
+    le, lo = e.location, other.get_location()
+    dx, dy = lo.x - le.x, lo.y - le.y
+    lon = dx * f.x + dy * f.y
+    lat = dx * r.x + dy * r.y
+    in_path = (0.0 < lon <= max_range) and (abs(lat) <= half_width)
+    return in_path, lon, lat
+
+
 def spawn_vehicle(world, x, y, z, yaw, model="vehicle.*"):
     """spawn รถ 1 คัน คืน actor (None ถ้าล้มเหลว). แทน actor_spawner เดิม"""
     bp_lib = world.get_blueprint_library()
