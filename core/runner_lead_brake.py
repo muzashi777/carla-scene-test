@@ -29,8 +29,9 @@ class LeadBrakeRecord:
     controller: str
     delay_frames: int
     ego_speed_kmh: float
+    lead_speed_kmh: float          # ความเร็วรถนำก่อนเบรก (km/h)
     mu: float
-    headway_d: float               # ระยะที่รถนำจอดข้างหน้าตอนเริ่ม (m)
+    headway_d: float               # ระยะห่างรถนำ-ego ตอนเริ่ม (m)
     avoided: bool = False
     collision_with: str = ""
     s_clearance: float = 0.0       # m (>0 = ระยะเหลือตอนหยุด)
@@ -53,7 +54,8 @@ def run_case(sess, cfg, case, controller_name, delay_frames, detector, viz=None)
 
     rec = LeadBrakeRecord(
         label=controller_name, controller=controller_name, delay_frames=delay_frames,
-        ego_speed_kmh=case["ego_speed_kmh"], mu=case["mu"], headway_d=case["headway_d"],
+        ego_speed_kmh=case["ego_speed_kmh"], lead_speed_kmh=case["lead_speed_kmh"],
+        mu=case["mu"], headway_d=case["headway_d"],
     )
 
     try:
@@ -269,7 +271,8 @@ def run_case(sess, cfg, case, controller_name, delay_frames, detector, viz=None)
 
         print("=" * 60)
         print(f"RESULT [{controller_name} delay={delay_frames}f "
-              f"v={case['ego_speed_kmh']:.0f} mu={case['mu']} headway={case['headway_d']:.0f}] : {result_txt}")
+              f"v={case['ego_speed_kmh']:.0f} vlead={case['lead_speed_kmh']:.0f} "
+              f"mu={case['mu']} headway={case['headway_d']:.0f}] : {result_txt}")
         if brake_info:
             print(f"  เริ่มเบรก tick={brake_info[0]} gap={brake_info[1]:.1f}m "
                   f"v={brake_info[2]:.1f} ttc={rec.t_c_warn:.2f}s")

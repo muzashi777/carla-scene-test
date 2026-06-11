@@ -16,11 +16,22 @@ from perception.yolo_detector import YoloDetector
 
 
 def build_cases():
-    keys = ["ego_speed_kmh", "mu", "headway_d"]
-    combos = itertools.product(
-        cfg.MATRIX["ego_speed_kmh"], cfg.MATRIX["mu"], cfg.MATRIX["headway_d"],
-    )
-    return [dict(zip(keys, c)) for c in combos]
+    """สร้างรายการเคสจาก MATRIX
+    LEAD_SAME_AS_EGO=True  → ความเร็วรถนำ = ความเร็ว ego ทุกเคส (speed × headway × μ)
+    LEAD_SAME_AS_EGO=False → lead_speed_kmh เป็นตัวแปรแยก (ego × lead × headway × μ)
+    """
+    same = getattr(cfg, "LEAD_SAME_AS_EGO", True)
+    cases = []
+    if same:
+        for v, h, m in itertools.product(
+                cfg.MATRIX["ego_speed_kmh"], cfg.MATRIX["headway_d"], cfg.MATRIX["mu"]):
+            cases.append(dict(ego_speed_kmh=v, lead_speed_kmh=v, headway_d=h, mu=m))
+    else:
+        for ve, vl, h, m in itertools.product(
+                cfg.MATRIX["ego_speed_kmh"], cfg.MATRIX["lead_speed_kmh"],
+                cfg.MATRIX["headway_d"], cfg.MATRIX["mu"]):
+            cases.append(dict(ego_speed_kmh=ve, lead_speed_kmh=vl, headway_d=h, mu=m))
+    return cases
 
 
 def main():
