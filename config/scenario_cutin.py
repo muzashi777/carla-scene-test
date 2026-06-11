@@ -132,3 +132,9 @@ DYN_MU0     = 0.85        # μ ฐาน (แห้ง) ต่ำกว่าน
 DYN_K_SPEED = 1.2         # น้ำหนักผลของความเร็ว
 DYN_K_MU    = 1.5         # น้ำหนักผลของความลื่น
 PARTIAL_BRAKE = 0.4       # แรงเบรกช่วง partial
+
+# proposed_enhanced: required-deceleration (รู้ทั้ง μ และการเบรกของรถข้างหน้า)
+#   ฉาก cut-in: dart จอดขวาง v_l=0 → a_req = v_e²/2gap (เคสสิ่งกีดขวางนิ่ง) อัตโนมัติ
+#   เพิ่ม controller="proposed_enhanced" ใน MATRIX_RUNS ได้เพื่อเทียบ
+REQ_FULL_FRAC = 0.9       # urgency ≥ ค่านี้ → เบรกเต็ม (90% ของเพดาน μ·g)
+REQ_WARN_FRAC = 0.6       # urgency ≥ ค่านี้ → เบรกบางส่วน (PARTIAL_BRAKE)

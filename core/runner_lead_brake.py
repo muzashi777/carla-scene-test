@@ -20,6 +20,7 @@ from control.base_controller import make_controller
 # import เพื่อให้ register() ทำงาน (ขึ้นทะเบียนชื่อ controller)
 import control.baseline_static_ttc   # noqa: F401
 import control.proposed_dynamic_ttc  # noqa: F401
+import control.proposed_enhanced     # noqa: F401
 
 
 @dataclass
@@ -43,6 +44,8 @@ class LeadBrakeRecord:
     peak_decel: float = 0.0        # m/s²
     brake_distance: float = 0.0    # m
     min_dist: float = 0.0
+    a_req_at_brake: float = 0.0    # m/s² ความหน่วงที่ "จำเป็น" ตอนเริ่มเบรก (ดูว่าใกล้ขีด μ·g แค่ไหน)
+    a_max: float = 0.0             # m/s² เพดานความหน่วง = μ·g ของเคสนี้
     result_txt: str = ""
 
 
@@ -157,6 +160,12 @@ def run_case(sess, cfg, case, controller_name, delay_frames, detector, viz=None)
         last_frame = None
         quit_flag = False
 
+        # ── ประมาณความเร็ว/ความหน่วงรถข้างหน้าจากการเคลื่อนที่จริง (รีเซ็ตทุกเคส) ──
+        # ไม่อ่าน LEAD_DECEL จาก config ตรง ๆ — ประมาณจาก finite-difference + EMA ให้สมจริง/ทำซ้ำได้
+        prev_lead_ms = actors.speed_ms(lead)
+        lead_decel_ema = 0.0
+        rec.a_max = case["mu"] * cfg.GRAVITY     # เพดานความหน่วง μ·g (คงที่ทั้งเคส)
+
         for tick in range(cfg.MAX_TICKS):
             wf = world.tick()
             try:
@@ -205,12 +214,19 @@ def run_case(sess, cfg, case, controller_name, delay_frames, detector, viz=None)
             prev_gap = gap
             ttc = (gap / rel_speed) if rel_speed > 1e-3 else math.inf
 
+            # ── ความเร็ว/ความหน่วงรถข้างหน้า (ground-truth, ประมาณจากการเคลื่อนที่จริง) ──
+            lead_ms = actors.speed_ms(lead)
+            raw_lead_decel = max(0.0, (prev_lead_ms - lead_ms) / cfg.FIXED_DT)
+            prev_lead_ms = lead_ms
+            lead_decel_ema = 0.3 * raw_lead_decel + 0.7 * lead_decel_ema   # EMA ลด noise
+
             # ── หน่วงเฟรมเฉพาะ detected (perception latency) ──
             det_buffer.append(detected_now)
             perceived = det_buffer[0]
 
             perc = Perception(detected=perceived, distance=gap,
-                              rel_speed=rel_speed, ttc=ttc, box_h=box_h)
+                              rel_speed=rel_speed, ttc=ttc, box_h=box_h,
+                              lead_speed=lead_ms, lead_decel=lead_decel_ema)
             ego_state = EgoState(speed_ms=actors.speed_ms(ego),
                                  speed_kmh=v_kmh, mu=case["mu"])
 
@@ -222,6 +238,8 @@ def run_case(sess, cfg, case, controller_name, delay_frames, detector, viz=None)
                 if not brake_engaged:
                     brake_engaged = True
                     brake_info = (tick, gap, v_kmh, ego_y, ttc)
+                    rec.a_req_at_brake = actors.required_decel(
+                        ego_state.speed_ms, lead_ms, lead_decel_ema, gap)
                 if cfg.BRAKE_MODEL == "kinematic":
                     decel_cmd = ctrl.brake * case["mu"] * cfg.GRAVITY
                     new_v = max(0.0, actors.speed_ms(ego) - decel_cmd * cfg.FIXED_DT)

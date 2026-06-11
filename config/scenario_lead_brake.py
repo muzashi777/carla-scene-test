@@ -121,10 +121,13 @@ MATRIX = dict(
     mu             = [MU_DRY, MU_WET],            # แรงเสียดทานถนน
     lead_speed_kmh = [30.0, 50.0],               # ใช้เฉพาะตอน LEAD_SAME_AS_EGO=False
 )
-# เทียบสมองกลคู่ไหน + หน่วงเฟรมของแต่ละตัว (เหมือนฉาก cut-in)
+# เทียบสมองกลไหนบ้าง + หน่วงเฟรมของแต่ละตัว
+#   default ฉาก CCRb นี้เทียบ baseline (TTC คงที่) vs proposed_enhanced (required-decel)
+#   เพิ่มบรรทัด proposed (dynamic-TTC) ได้เพื่อเทียบ 3 ทาง
 MATRIX_RUNS = [
-    dict(label="baseline", controller="baseline", delay_frames=0),
-    dict(label="proposed", controller="proposed", delay_frames=0),
+    dict(label="baseline",          controller="baseline",          delay_frames=0),
+    # dict(label="proposed",        controller="proposed",          delay_frames=0),
+    dict(label="proposed_enhanced", controller="proposed_enhanced", delay_frames=0),
 ]
 RESULTS_DIR = "results"
 RESULTS_PREFIX = "lead_matrix"     # ไฟล์ผล → results/lead_matrix_*.csv (แยกจากฉาก cut-in)
@@ -142,3 +145,8 @@ DYN_MU0     = 0.85
 DYN_K_SPEED = 1.2
 DYN_K_MU    = 1.5
 PARTIAL_BRAKE = 0.4
+
+# proposed_enhanced: required-deceleration (รู้ทั้ง μ และการเบรกของรถข้างหน้า)
+#   urgency = a_req / (μ·g) ; a_req = v_e² / (2·(gap + v_l²/2a_l))
+REQ_FULL_FRAC = 0.9       # urgency ≥ ค่านี้ → เบรกเต็ม (90% ของเพดาน μ·g)
+REQ_WARN_FRAC = 0.6       # urgency ≥ ค่านี้ → เบรกบางส่วน (PARTIAL_BRAKE)

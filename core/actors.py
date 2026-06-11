@@ -23,6 +23,31 @@ def dist2d(a, b):
     return math.hypot(la.x - lb.x, la.y - lb.y)
 
 
+def required_decel(v_e, v_l, a_l, gap):
+    """ความหน่วงต่ำสุดที่ ego ต้องใช้เพื่อหยุดให้ทันท้ายรถข้างหน้า (m/s²)
+    คำนึงถึง 'ระยะที่รถข้างหน้ายังวิ่งต่อก่อนหยุด' (d_lead = v_l²/2a_l)
+      v_e ≤ v_l            → ไม่ได้เข้าใกล้ → 0
+      v_l ≈ 0              → d_lead = 0 (รถข้างหน้าหยุดแล้ว เช่น dart จอดขวาง)
+      a_l > 0.1            → d_lead = v_l²/2a_l (รถข้างหน้ากำลังเบรก)
+      ไม่เบรก (a_l≈0,v_l>0) → d_lead = inf (ยังไม่ฉุกเฉิน รถข้างหน้าไม่ได้ชะลอ)
+    a_req = v_e² / (2·(gap + d_lead)); คืน inf ถ้าระยะหยุดที่มี ≈ 0 (สายเกินไป)
+    ใช้ร่วมทั้งสมองกล (ตัดสินใจ) และ runner (บันทึก a_req ตอนเริ่มเบรก) ให้ตรงกัน
+    """
+    v_e = max(0.0, v_e); v_l = max(0.0, v_l); a_l = max(0.0, a_l); gap = max(0.0, gap)
+    if v_e <= v_l:
+        return 0.0
+    if v_l <= 1e-3:
+        d_lead = 0.0
+    elif a_l > 0.1:
+        d_lead = (v_l * v_l) / (2.0 * a_l)
+    else:
+        d_lead = math.inf
+    D = gap + d_lead
+    if D <= 1e-6:
+        return math.inf
+    return (v_e * v_e) / (2.0 * D)
+
+
 def grab_synced(q, frame_id, timeout=2.0):
     """อ่านภาพจากคิวจนกว่า image.frame ตรง/ใหม่กว่า frame_id (กันภาพดริฟต์ใน sync mode)"""
     while True:

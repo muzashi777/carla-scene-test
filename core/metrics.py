@@ -37,6 +37,8 @@ class RunRecord:
     peak_decel: float = 0.0        # m/s² ความหน่วงสูงสุดที่วัดได้ขณะเบรก
     brake_distance: float = 0.0    # m ระยะตั้งแต่เริ่มเบรกจนหยุด
     min_dist: float = 0.0
+    a_req_at_brake: float = 0.0    # m/s² ความหน่วงที่ "จำเป็น" ตอนเริ่มเบรก (ดูว่าใกล้ขีด μ·g แค่ไหน)
+    a_max: float = 0.0             # m/s² เพดานความหน่วง = μ·g ของเคสนี้
     result_txt: str = ""
 
 
