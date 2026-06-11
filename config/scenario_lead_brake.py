@@ -1,0 +1,126 @@
+# -*- coding: utf-8 -*-
+"""
+ไฟล์ตั้งค่ากลางของฉาก lead-brake (มีรถจอด/เบรกแล้วอยู่ข้างหน้าในเลนเดียวกัน)
+----------------------------------------------------------------------
+สถานการณ์: มีรถคันหนึ่งอยู่ข้างหน้า ego ในเลนเดียวกันและ "เบรกจอดสนิทแล้ว"
+           ego วิ่งเข้ามาด้านหลัง → ทดสอบ AEB ว่าหยุดทันไหม (Euro-NCAP CCRs)
+แยกขาดจากฉาก cut-in: แก้ค่าที่นี่ที่เดียว แล้ว run_single_lead.py / run_matrix_lead.py ใช้ตาม
+โครงสร้าง/พารามิเตอร์ส่วนใหญ่ยกมาจาก config/scenario_cutin.py (สมองกล/YOLO/CPEIM เหมือนกัน)
+"""
+
+# ── การเชื่อมต่อ CARLA ─────────────────────────────────────────────
+HOST = "localhost"
+PORT = 2000
+TIMEOUT = 10.0
+
+# ── พารามิเตอร์ซิม ─────────────────────────────────────────────────
+FIXED_DT  = 0.05          # 20 FPS (sync mode)
+MAX_TICKS = 400
+LOG_EVERY = 10
+SETTLE_TICKS = 20         # tick เปล่าให้ฉากนิ่งก่อนปล่อยรถ
+STOP_KMH  = 0.6           # ต่ำกว่านี้ถือว่าหยุดสนิท
+END_Y     = -70.0         # ego เลยจุดนี้ = วิ่งทะลุจุดที่ควรชนไปแล้ว (กันค้าง)
+GRAVITY   = 9.81
+
+# ── ตำแหน่งรถ (พิกัดโลก จากต้นแบบ scene03) ─────────────────────────
+EGO_SPAWN  = dict(x=3.02, y=-8.70, z=1.15, yaw=-90)            # ego เริ่มที่นี่ วิ่งไปทาง -Y
+# รถนำ (lead) อยู่ "เลนเดียวกัน หันทางเดียวกัน" ข้างหน้า ego
+#   y ของ lead คำนวณจาก EGO_SPAWN.y − headway_d ตอน spawn (ดู runner)
+#   จึงระบุแค่ x/z/yaw/model ที่นี่ ส่วนระยะห่างเป็นตัวแปรทดสอบ (headway_d)
+LEAD_SPAWN = dict(x=3.02, z=1.15, yaw=-90,
+                  model="vehicle.ue4.audi.tt")
+
+# ── กล้อง ───────────────────────────────────────────────────────────
+CAM_W, CAM_H = 1280, 720
+CAM_FRONT_TF = dict(x=3.5, y=0.2, z=1.60, pitch=8)             # กล้องหน้าติด ego (ใช้กับ YOLO)
+CAM_TOP_TF   = dict(x=-2.0, y=-6.0, z=3.5, pitch=-15, yaw=45)  # กล้อง top view (โชว์เฉยๆ)
+CAM_FOV_DEG = 90.0
+
+# ── YOLO (ตัวตรวจจับว่ามีรถในเลนไหม) ───────────────────────────────
+YOLO_MODEL  = "yolov8n.pt"
+YOLO_DEVICE = "cpu"       # "cpu" หรือ "cuda"
+CONF_THRESH = 0.45
+IOU_THRESH  = 0.45
+TARGET_CLASSES = [0, 1, 2, 3, 5, 7, 9, 11]
+VEHICLE_CLS = (2, 3, 5, 7)        # car, moto, bus, truck → ใช้ตัดสินว่าเป็น "รถ"
+CLASS_COLORS = {0:(0,255,0),1:(255,165,0),2:(0,0,255),3:(255,0,255),
+                5:(0,165,255),7:(128,0,128),9:(0,255,255),11:(255,255,0)}
+
+# แถบเลน ego เป็นพิกเซล — รถนำอยู่กลางเลนพอดี YOLO เห็นง่ายกว่าฉาก cut-in
+LANE_LEFT  = 520
+LANE_RIGHT = 760
+MIN_BOX_H  = 90
+
+# ── แหล่งเกตตรวจจับ ──
+#   "groundtruth" = ใช้ตำแหน่งจริงจาก CARLA ว่า lead อยู่ในเส้นทางข้างหน้าไหม (เชื่อถือได้/ทำซ้ำได้)
+#   "yolo"        = ใช้แถบพิกเซลกลางภาพ + ความสูงกล่อง
+#   "both_or"     = จริงเมื่อ ground-truth หรือ YOLO อย่างใดอย่างหนึ่งจริง
+DETECTION_SOURCE = "groundtruth"
+
+# ทางเดิน (corridor) ของ ego สำหรับเกต ground-truth — วัดในกรอบพิกัด ego
+INPATH_HALF_WIDTH = 1.8    # ครึ่งความกว้างเลน (m)
+INPATH_MAX_RANGE  = 80.0   # มองไปข้างหน้าไกลสุด (m) — เผื่อ headway สูง
+
+# ── predictive corridor ──
+# ฉากนี้รถนำอยู่ในเลนข้างหน้าตรง ๆ อยู่แล้ว (ไม่ได้พุ่งเข้าด้านข้าง) จึงปิด predict
+INPATH_PREDICT   = False
+INPATH_LOOKAHEAD = 0.0
+
+# ── การจับคู่เฟรมกล้องกับ snapshot โลก ──
+FRAME_SYNC = True
+
+# ── ระยะผิวถึงผิว (surface gap) ──
+# ฉากนี้ชนแบบท้ายชนหน้า (rear-end) รถสองคันหันทางเดียวกัน
+# จึงหัก (ครึ่งความยาว ego + ครึ่งความยาว lead) ออกจากระยะศูนย์กลาง
+AUTO_GAP_OFFSET = True     # True = คำนวณจาก bounding box อัตโนมัติ (ego.extent.x + lead.extent.x)
+GAP_OFFSET = 4.5           # ใช้ค่านี้เมื่อ AUTO_GAP_OFFSET=False (ม.)
+
+# ── โมเดลการเบรก ──
+BRAKE_MODEL = "kinematic"
+
+# ── ความลื่นถนน μ ───────────────────────────────────────────────────
+MU_DRY = 0.85
+MU_WET = 0.40
+
+# ══════════════════════════════════════════════════════════════════
+#  เคสเดี่ยว สำหรับ run_single_lead.py (ดีบัก/พรีเซนต์ มีภาพ)
+# ══════════════════════════════════════════════════════════════════
+SINGLE_CASE = dict(
+    ego_speed_kmh = 50.0,     # ความเร็วรถเรา (v_x)
+    mu            = MU_WET,    # ความลื่นถนน
+    headway_d     = 40.0,     # ระยะห่างตอนเริ่ม: รถนำจอดอยู่ข้างหน้า ego = ระยะนี้ (เมตร)
+)
+SINGLE_CONTROLLER  = "proposed"   # "baseline" | "proposed"
+SINGLE_DELAY_FRAMES = 0           # หน่วงการรับรู้ (เฟรม) 0=ทันที, 16≈0.8s
+SHOW_WINDOW = True                # โชว์หน้าต่าง OpenCV ไหม
+
+# ══════════════════════════════════════════════════════════════════
+#  TEST MATRIX สำหรับ run_matrix_lead.py (ไล่อัตโนมัติ ไม่มีภาพ)
+#  ฉาก lead-brake = 4 speed × 2 μ × 4 headway = 32 เคส/สมองกล
+# ══════════════════════════════════════════════════════════════════
+MATRIX = dict(
+    ego_speed_kmh = [30.0, 40.0, 50.0, 60.0],
+    mu            = [MU_DRY, MU_WET],
+    headway_d     = [30.0, 40.0, 50.0, 60.0],   # ระยะที่รถนำจอดข้างหน้า (ม.)
+)
+# เทียบสมองกลคู่ไหน + หน่วงเฟรมของแต่ละตัว (เหมือนฉาก cut-in)
+MATRIX_RUNS = [
+    dict(label="baseline", controller="baseline", delay_frames=0),
+    dict(label="proposed", controller="proposed", delay_frames=0),
+]
+RESULTS_DIR = "results"
+RESULTS_PREFIX = "lead_matrix"     # ไฟล์ผล → results/lead_matrix_*.csv (แยกจากฉาก cut-in)
+
+# ══════════════════════════════════════════════════════════════════
+#  พารามิเตอร์สมองกล (เหมือนฉาก cut-in เพื่อเทียบกันได้ตรง ๆ)
+# ══════════════════════════════════════════════════════════════════
+# baseline: TTC คงที่
+TTC_WARN_FULL = 1.6
+TTC_BRAKE_FULL = 0.6
+
+# proposed: TTC ปรับตามความเร็ว + ความลื่น
+DYN_V0      = 40.0
+DYN_MU0     = 0.85
+DYN_K_SPEED = 1.2
+DYN_K_MU    = 1.5
+PARTIAL_BRAKE = 0.4
