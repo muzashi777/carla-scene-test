@@ -72,6 +72,84 @@ ego วิ่งตรง รถ dart จอดด้านข้าง พอ e
 
 > ทั้งสองฉากป้อน `Perception`/`EgoState` รูปแบบเดียวกันให้สมองกล → ใช้ controller ชุดเดียวกันได้ไม่ต้องแก้
 
+## Test cases — ฉาก cut-in / dart-out
+
+**สถานการณ์โดยย่อ:** ego วิ่งตรงด้วยความเร็วคงที่ มีรถ (dart) จอดด้านข้าง พอ ego เข้าใกล้จนระยะ ego–dart ≤ `trigger_d`
+รถ dart **พุ่งออกตั้งฉาก** เข้ามาในเลน ego แล้วจอดขวาง (ที่ `DART_STOP_X`) → วัดว่า AEB ของ ego เบรกหลบชนได้ทันไหม
+
+**ตัวแปรที่ไล่ทดสอบ (sweep):**
+
+| ตัวแปร | ค่า | หมายเหตุ |
+|---|---|---|
+| `ego_speed_kmh` | 30, 40, 50, 60 | ความเร็ว ego |
+| `trigger_d` (Δd) | 20, 25, 30, 35 m | ระยะ ego–dart ที่ทำให้ dart เริ่มพุ่งออก (ตัด 10/15 m ที่หินเกินจนไม่มีใครรอด) |
+| `mu` | 0.85 (แห้ง), 0.40 (เปียก) | แรงเสียดทานถนน |
+| `dart_speed_kmh` | 20 | ความเร็ว dart ขณะพุ่งออก (คงที่ — ขยายเป็น [20, 40] ได้) |
+
+**จำนวนเคส:** 4 speed × 4 Δd × 2 μ × 1 dart_speed = **32 เคส/สมองกล** รันทั้ง `baseline` และ `proposed` บนเคสชุดเดียวกัน
+รวม **64 รัน** ต่อการเรียก `run_matrix.py` หนึ่งครั้ง
+
+**พารามิเตอร์คงที่ (ไม่ได้ sweep):**
+- `DART_SPAWN`, `DART_STOP_X` — เรขาคณิตจุดเกิด/จุดจอดขวางของ dart (จากต้นแบบ scene03)
+- `INPATH_PREDICT = True`, `INPATH_LOOKAHEAD = 1.5` s — เห็น dart ตั้งแต่กำลังเข้าเลน (predictive corridor)
+- `BRAKE_MODEL = "kinematic"`, `LANE_LEFT/RIGHT`, `MIN_BOX_H`, สมองกล (`TTC_*`, `DYN_*`) — เหมือนฉาก lead-brake
+
+**คอลัมน์ CSV หลัก (`results/matrix_*.csv`):** เหมือนฉาก lead-brake แต่คอลัมน์ระยะห่างเป็น
+`trigger_d` (Δd, m) และ `dart_speed_kmh` แทน `headway_thw`/`headway_d` ส่วนคอลัมน์เมตริก
+(`avoided`, `s_clearance`, `a_b_mfdd`, `t_c_warn`, `dv_speed_var`, `peak_decel`, `result_txt`, …) เหมือนกันทุกตัว
+
+## Test cases — ฉาก lead-brake (CCRb)
+
+**สถานการณ์โดยย่อ:** รถนำวิ่งอยู่ข้างหน้า ego ในเลนเดียวกันด้วยความเร็วเท่ากัน (รักษาระยะห่างคงที่)
+พอวิ่งครบระยะ `LEAD_BRAKE_AFTER_M` รถนำ **เบรกกระทันหัน** ที่ความหน่วงคงที่ `LEAD_DECEL` จนหยุดนิ่ง
+ระยะระหว่างรถจึงหดเร็ว → วัดว่า AEB ของ ego เบรกหลบชนได้ทันไหม (Euro-NCAP CCRb)
+
+**ตัวแปรที่ไล่ทดสอบ (sweep):**
+
+| ตัวแปร | ค่า | หมายเหตุ |
+|---|---|---|
+| `ego_speed_kmh` | 30, 40, 50, 60 | ความเร็วทั้ง ego และรถนำ (เท่ากัน เพราะ `LEAD_SAME_AS_EGO=True`) |
+| `HEADWAY_THW` | 1.0, 1.5, 2.0, 2.5 วินาที | ระยะห่างเป็น **เวลา** (THW) — ระยะจริง = ego_speed(m/s) × THW |
+| `mu` | 0.85 (แห้ง), 0.40 (เปียก) | แรงเสียดทานถนน |
+
+**จำนวนเคส:** 4 speed × 4 THW × 2 μ = **32 เคส/สมองกล** รันทั้ง `baseline` และ `proposed` บนเคสชุดเดียวกัน
+รวม **64 รัน** ต่อการเรียก `run_matrix_lead.py` หนึ่งครั้ง
+
+**ตาราง THW → ระยะจริง (เมตร) ตามความเร็ว:**
+
+| speed | 1.0 s | 1.5 s | 2.0 s | 2.5 s |
+|---|---|---|---|---|
+| 30 km/h |  8.3 m | 12.5 m | 16.7 m | 20.8 m |
+| 40 km/h | 11.1 m | 16.7 m | 22.2 m | 27.8 m |
+| 50 km/h | 13.9 m | **20.8 m** | 27.8 m | 34.7 m |
+| 60 km/h | 16.7 m | 25.0 m | 33.3 m | 41.7 m |
+
+(ตรวจสอบ: 50 km/h = 13.89 m/s × 1.5 s ≈ **20.8 m**) ทุกระยะ < `INPATH_MAX_RANGE` (80 m) จึงอยู่ในระยะที่เกตตรวจจับเห็น
+
+**พารามิเตอร์คงที่ (ไม่ได้ sweep):**
+- `LEAD_DECEL = 4.0` m/s² — ความหน่วงรถนำตอนเบรก (มาตรฐาน CCRb)
+- `LEAD_BRAKE_AFTER_M = 8.0` m — รถนำวิ่งนำได้ไกลเท่านี้ก่อนเบรก
+- `LEAD_SAME_AS_EGO = True` — รถนำเร็วเท่า ego (ตั้ง `False` เพื่อให้ `lead_speed_kmh` เป็นตัวแปรแยก)
+- `BRAKE_MODEL = "kinematic"`, `LANE_LEFT/RIGHT`, `MIN_BOX_H`, สมองกล (`TTC_*`, `DYN_*`) — เหมือนฉาก cut-in
+
+**สลับกลับเป็นโหมดระยะคงที่:** ตั้ง `USE_THW = False` ใน `config/scenario_lead_brake.py`
+ระบบจะกลับไปไล่ `MATRIX["headway_d"]` (เมตร) แทน และคอลัมน์ `headway_thw` จะเป็น 0
+
+**คอลัมน์ CSV หลัก (`results/lead_matrix_*.csv`):**
+
+| คอลัมน์ | ความหมาย |
+|---|---|
+| `label`, `controller`, `delay_frames` | สมองกลที่ใช้ + เฟรมหน่วงการรับรู้ |
+| `ego_speed_kmh`, `lead_speed_kmh`, `mu` | ความเร็ว ego / รถนำ และแรงเสียดทานของเคส |
+| `headway_thw` | ระยะห่างที่ตั้งเป็นเวลา (วินาที) — 0 ถ้าใช้โหมดระยะคงที่ |
+| `headway_d` | ระยะห่างจริง (เมตร) ที่คำนวณได้ (THW×speed หรือค่าคงที่) |
+| `avoided`, `collision_with`, `collision_speed_kmh` | หลบชนสำเร็จไหม / ชนกับอะไร / ความเร็วตอนชน |
+| `s_clearance` | ระยะเหลือตอนหยุดสนิท (m) |
+| `a_b_mfdd`, `peak_decel`, `brake_distance` | ความหน่วงเฉลี่ย MFDD / ความหน่วงสูงสุด / ระยะเบรกจนหยุด |
+| `t_c_warn` | TTC ตอนเริ่มเบรก (warning lead time, s) |
+| `dv_speed_var` | ความเร็วที่หายไป (km/h) |
+| `min_dist`, `result_txt` | ระยะศูนย์กลางใกล้สุด / ข้อความสรุปผล |
+
 ## กลไกความต่าง 20% — สลับได้ 2 ทาง
 
 ใน `config.MATRIX_RUNS` กำหนดได้ว่าจะเทียบอะไรกับอะไร:
@@ -94,14 +172,14 @@ ego วิ่งตรง รถ dart จอดด้านข้าง พอ e
 ## จุดจูนหลัก (ทั้งหมดอยู่ใน config ของแต่ละฉาก)
 
 ร่วมทั้งสองฉาก:
-- `MATRIX` — ตัวแปรทดสอบ (cut-in: speed × μ × Δd × dart_speed / lead-brake: speed × headway × μ)
+- `MATRIX` — ตัวแปรทดสอบ (cut-in: speed × μ × Δd × dart_speed / lead-brake: speed × THW × μ)
 - `DYN_K_SPEED`, `DYN_K_MU`, `DYN_V0`, `DYN_MU0` — ความก้าวร้าวของ proposed
 - `TTC_BRAKE_FULL`, `TTC_WARN_FULL` — threshold ของ baseline
 - `LANE_LEFT/RIGHT`, `MIN_BOX_H` — แถบเลนพิกเซล + ระยะวิกฤตของ YOLO
 - `EGO_SPAWN` — จุดเกิด ego (จากต้นแบบ scene03)
 
 เฉพาะ cut-in (`scenario_cutin.py`): `DART_SPAWN`, `DART_STOP_X`, `INPATH_PREDICT/LOOKAHEAD`
-เฉพาะ lead-brake (`scenario_lead_brake.py`): `LEAD_SPAWN` (x/z/yaw/model), `LEAD_BRAKE_AFTER_M`, `LEAD_DECEL`, `LEAD_SAME_AS_EGO`, `headway_d` ใน `MATRIX`/`SINGLE_CASE`, `RESULTS_PREFIX`
+เฉพาะ lead-brake (`scenario_lead_brake.py`): `LEAD_SPAWN` (x/z/yaw/model), `LEAD_BRAKE_AFTER_M`, `LEAD_DECEL`, `LEAD_SAME_AS_EGO`, `USE_THW` + `HEADWAY_THW` (ระยะห่างเป็นวินาที) หรือ `headway_d` (เมตร, โหมดเดิม), `RESULTS_PREFIX`
 
 ## เพิ่มสมองกลใหม่ในอนาคต
 

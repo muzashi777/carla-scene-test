@@ -31,7 +31,8 @@ class LeadBrakeRecord:
     ego_speed_kmh: float
     lead_speed_kmh: float          # ความเร็วรถนำก่อนเบรก (km/h)
     mu: float
-    headway_d: float               # ระยะห่างรถนำ-ego ตอนเริ่ม (m)
+    headway_thw: float             # ระยะห่างเป็นเวลา THW (s) — 0 ถ้าใช้โหมดระยะคงที่
+    headway_d: float               # ระยะห่างรถนำ-ego ตอนเริ่ม "เมตรจริง" (คำนวณจาก THW×speed หรือค่าคงที่)
     avoided: bool = False
     collision_with: str = ""
     s_clearance: float = 0.0       # m (>0 = ระยะเหลือตอนหยุด)
@@ -52,10 +53,23 @@ def run_case(sess, cfg, case, controller_name, delay_frames, detector, viz=None)
     top_q = queue.Queue()
     collision = {"hit": False, "with": None}
 
+    # ── ระยะห่างรถนำ: THW (วินาที) → เมตรจริง  หรือ  ระยะคงที่ (โหมดเดิม) ──
+    # THW อิงความเร็ว "ego" เสมอ (เราเป็นคนตามรถนำ) แม้เปิด lead_speed ต่างจาก ego
+    ego_ms = case["ego_speed_kmh"] / 3.6
+    if getattr(cfg, "USE_THW", False):
+        headway_thw = case["headway_thw"]
+        headway_d = ego_ms * headway_thw          # THW → เมตรจริง
+    else:
+        headway_thw = 0.0
+        headway_d = case["headway_d"]             # ระยะคงที่ (พฤติกรรมเดิม)
+    if headway_d > cfg.INPATH_MAX_RANGE:
+        print(f"[WARN] headway_d={headway_d:.1f}m > INPATH_MAX_RANGE={cfg.INPATH_MAX_RANGE}m "
+              f"— เกตตรวจจับ ground-truth อาจไม่เห็นรถนำตอนเริ่ม")
+
     rec = LeadBrakeRecord(
         label=controller_name, controller=controller_name, delay_frames=delay_frames,
         ego_speed_kmh=case["ego_speed_kmh"], lead_speed_kmh=case["lead_speed_kmh"],
-        mu=case["mu"], headway_d=case["headway_d"],
+        mu=case["mu"], headway_thw=headway_thw, headway_d=headway_d,
     )
 
     try:
@@ -68,7 +82,7 @@ def run_case(sess, cfg, case, controller_name, delay_frames, detector, viz=None)
         actors.set_friction(ego, case["mu"])
 
         # ── LEAD (จอดข้างหน้า ego ในเลนเดียวกัน; y = ego.y − headway_d เพราะ ego วิ่งไป -Y) ──
-        lead_y = cfg.EGO_SPAWN["y"] - case["headway_d"]
+        lead_y = cfg.EGO_SPAWN["y"] - headway_d
         lead = actors.spawn_vehicle(
             world, x=cfg.LEAD_SPAWN["x"], y=lead_y, z=cfg.LEAD_SPAWN["z"],
             yaw=cfg.LEAD_SPAWN["yaw"], model=cfg.LEAD_SPAWN["model"])
@@ -270,9 +284,11 @@ def run_case(sess, cfg, case, controller_name, delay_frames, detector, viz=None)
         rec.dv_speed_var = case["ego_speed_kmh"] - rec.collision_speed_kmh
 
         print("=" * 60)
+        hw_txt = (f"THW={headway_thw:.1f}s→{headway_d:.1f}m" if getattr(cfg, "USE_THW", False)
+                  else f"headway={headway_d:.0f}m")
         print(f"RESULT [{controller_name} delay={delay_frames}f "
               f"v={case['ego_speed_kmh']:.0f} vlead={case['lead_speed_kmh']:.0f} "
-              f"mu={case['mu']} headway={case['headway_d']:.0f}] : {result_txt}")
+              f"mu={case['mu']} {hw_txt}] : {result_txt}")
         if brake_info:
             print(f"  เริ่มเบรก tick={brake_info[0]} gap={brake_info[1]:.1f}m "
                   f"v={brake_info[2]:.1f} ttc={rec.t_c_warn:.2f}s")

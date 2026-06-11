@@ -17,20 +17,23 @@ from perception.yolo_detector import YoloDetector
 
 def build_cases():
     """สร้างรายการเคสจาก MATRIX
-    LEAD_SAME_AS_EGO=True  → ความเร็วรถนำ = ความเร็ว ego ทุกเคส (speed × headway × μ)
-    LEAD_SAME_AS_EGO=False → lead_speed_kmh เป็นตัวแปรแยก (ego × lead × headway × μ)
+    ระยะห่าง: USE_THW=True → ไล่ headway_thw (วินาที) / USE_THW=False → ไล่ headway_d (เมตร, โหมดเดิม)
+    ความเร็ว: LEAD_SAME_AS_EGO=True → รถนำเร็วเท่า ego / False → lead_speed_kmh เป็นตัวแปรแยก
+    runner จะแปลง THW→เมตรจริง เอง (อิงความเร็ว ego)
     """
     same = getattr(cfg, "LEAD_SAME_AS_EGO", True)
+    use_thw = getattr(cfg, "USE_THW", False)
+    gap_key = "headway_thw" if use_thw else "headway_d"
+    gap_vals = cfg.MATRIX["headway_thw"] if use_thw else cfg.MATRIX["headway_d"]
+    speeds, mus = cfg.MATRIX["ego_speed_kmh"], cfg.MATRIX["mu"]
+
     cases = []
     if same:
-        for v, h, m in itertools.product(
-                cfg.MATRIX["ego_speed_kmh"], cfg.MATRIX["headway_d"], cfg.MATRIX["mu"]):
-            cases.append(dict(ego_speed_kmh=v, lead_speed_kmh=v, headway_d=h, mu=m))
+        for v, g, m in itertools.product(speeds, gap_vals, mus):
+            cases.append({"ego_speed_kmh": v, "lead_speed_kmh": v, gap_key: g, "mu": m})
     else:
-        for ve, vl, h, m in itertools.product(
-                cfg.MATRIX["ego_speed_kmh"], cfg.MATRIX["lead_speed_kmh"],
-                cfg.MATRIX["headway_d"], cfg.MATRIX["mu"]):
-            cases.append(dict(ego_speed_kmh=ve, lead_speed_kmh=vl, headway_d=h, mu=m))
+        for ve, vl, g, m in itertools.product(speeds, cfg.MATRIX["lead_speed_kmh"], gap_vals, mus):
+            cases.append({"ego_speed_kmh": ve, "lead_speed_kmh": vl, gap_key: g, "mu": m})
     return cases
 
 
