@@ -44,7 +44,7 @@ run_matrix_lead.py           ฉาก lead-brake: ไล่ matrix ทั้ง
 **ฉาก 1 — cut-in / dart-out**
 ```bash
 python run_single.py     # ดีบัก 1 เคส มีภาพ — แก้ SINGLE_* ใน config/scenario_cutin.py
-python run_matrix.py     # ไล่ 32 เคส × สมองกล → results/matrix_*.csv + สรุป
+python run_matrix.py     # ไล่ 32 เคส × 3 สมองกล (baseline/proposed/proposed_enhanced) → results/matrix_*.csv + สรุป
 ```
 
 **ฉาก 2 — lead-brake (รถนำวิ่งนำแล้วเบรกกระทันหัน)**
@@ -86,8 +86,8 @@ ego วิ่งตรง รถ dart จอดด้านข้าง พอ e
 | `mu` | 0.85 (แห้ง), 0.40 (เปียก) | แรงเสียดทานถนน |
 | `dart_speed_kmh` | 20 | ความเร็ว dart ขณะพุ่งออก (คงที่ — ขยายเป็น [20, 40] ได้) |
 
-**จำนวนเคส:** 4 speed × 4 Δd × 2 μ × 1 dart_speed = **32 เคส/สมองกล** รันทั้ง `baseline` และ `proposed` บนเคสชุดเดียวกัน
-รวม **64 รัน** ต่อการเรียก `run_matrix.py` หนึ่งครั้ง
+**จำนวนเคส:** 4 speed × 4 Δd × 2 μ × 1 dart_speed = **32 เคส/สมองกล** รันทั้ง `baseline`, `proposed`
+และ `proposed_enhanced` บนเคสชุดเดียวกัน รวม **96 รัน** (32 × 3) ต่อการเรียก `run_matrix.py` หนึ่งครั้ง
 
 **พารามิเตอร์คงที่ (ไม่ได้ sweep):**
 - `DART_SPAWN`, `DART_STOP_X` — เรขาคณิตจุดเกิด/จุดจอดขวางของ dart (จากต้นแบบ scene03)
@@ -259,6 +259,12 @@ urgency = a_req / a_max
 และสูตรนี้ generalizes ไปฉาก cut-in อัตโนมัติ: dart จอดขวาง `v_l=0 → d_lead=0 → a_req=v_e²/2gap`
 (= เคสสิ่งกีดขวางนิ่ง) เคส guard ไว้หมด (`required_decel` ใน `core/actors.py`): `v_e ≤ v_l` → 0,
 รถข้างหน้าไม่เบรก (`a_l≈0, v_l>0`) → `d_lead=∞` (ยังไม่ฉุกเฉิน), ระยะหยุดที่มี ≈ 0 → `∞` (สายเกินไป)
+
+**ประเมินบน 2 ฉาก:** ตอนนี้ `proposed_enhanced` รันใน `MATRIX_RUNS` ของ **ทั้งฉาก cut-in และ lead-brake**
+(เทียบ 3 ทางกับ `baseline`/`proposed` บนเคสชุดเดียวกัน) ในฉาก cut-in สูตรลดรูปเป็น **เคสสิ่งกีดขวางนิ่ง**
+(`v_l=0 → d_lead=0 → a_req = v_e²/2·gap`) จึงใช้ได้โดยไม่ต้องแก้ตรรกะ และใช้ **ชั้น perception ร่วม**
+(`Perception`/`EgoState` ชุดเดียวกัน) กับ **ทางเบรกที่ถูก clamp** (`apply_kinematic_brake`, `peak_decel ≤ μ·g`)
+เหมือน `baseline`/`proposed` ทุกประการ → เทียบกันได้อย่างยุติธรรมทั้งสองฉาก
 
 **config knob ใหม่:** `REQ_FULL_FRAC` (เบรกเต็มเมื่อ a_req ถึง 90% ของ μ·g), `REQ_WARN_FRAC` (เบรกบางส่วน)
 อยู่ทั้งใน `scenario_lead_brake.py` และ `scenario_cutin.py` — เลือกใช้ตัวไหนผ่าน `MATRIX_RUNS`

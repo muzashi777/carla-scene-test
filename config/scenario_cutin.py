@@ -110,11 +110,14 @@ MATRIX = dict(
     trigger_d     = [20.0, 25.0, 30.0, 35.0],   # ตัด 10/15 ที่หินเกินจนไม่มีใครรอด
     dart_speed_kmh= [20.0],          # คงที่ก่อน (เพิ่มเป็น [20,40] ได้ถ้าอยากขยาย)
 )
-# จะรันสมองกลคู่ไหนมาเทียบกัน + หน่วงเฟรมของแต่ละตัว
+# จะรันสมองกลไหนมาเทียบกัน + หน่วงเฟรมของแต่ละตัว
 # (สลับได้ 2 ทาง: เปลี่ยน controller หรือเปลี่ยน delay)
+#   default เทียบ 3 สมองกล (baseline, proposed, proposed_enhanced) บนเคสชุดเดียวกัน
+#   proposed_enhanced (required-decel) ลดรูปเป็นเคสสิ่งกีดขวางนิ่งในฉาก cut-in (v_l=0 → a_req=v_e²/2gap)
 MATRIX_RUNS = [
-    dict(label="baseline", controller="baseline", delay_frames=0),
-    dict(label="proposed", controller="proposed", delay_frames=0),
+    dict(label="baseline",          controller="baseline",          delay_frames=0),
+    dict(label="proposed",          controller="proposed",          delay_frames=0),
+    dict(label="proposed_enhanced", controller="proposed_enhanced", delay_frames=0),
 ]
 RESULTS_DIR = "results"
 
