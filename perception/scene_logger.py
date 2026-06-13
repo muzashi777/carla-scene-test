@@ -79,12 +79,13 @@ def _spawn_world_camera(world, w, h, fov, world_tf, sink):
 
 def run_pass(sess, cfg, detector, pass_type,
              sample_every_m=1.0, sample_every_frames=0,
-             drive_kmh=30.0, settle_ticks=20, max_ticks=4000):
+             drive_kmh=30.0, settle_ticks=20, max_ticks=4000, viz=None):
     """
     ขับกล้องไปตาม trajectory ตรง (EGO_SPAWN.y → END_Y) แล้ว log ทุก detection
       pass_type            : "background" (ไม่ spawn รถ) | "with_actor" (spawn dart)
       sample_every_m  > 0  : สุ่มตัวอย่างทุก ๆ M เมตรของระยะวิ่ง (โหมดหลัก)
       sample_every_frames  : ถ้า sample_every_m<=0 ให้ใช้ทุก ๆ N เฟรมแทน
+      viz                  : PercepViz (โชว์ OpenCV) หรือ None (headless) — วาดบนเฟรมที่ sample
     คืน (rows, stats)
       rows  : list ของ dict (หนึ่งแถวต่อหนึ่ง detection)
       stats : dict สรุป pass นี้ (n_frames_sampled, n_detections, per_class{name:[conf,...]})
@@ -179,6 +180,19 @@ def run_pass(sess, cfg, detector, pass_type,
                     ))
                     per_class.setdefault(d["class_name"], []).append(d["confidence"])
                     n_dets += 1
+
+                # ── โชว์หน้าต่าง OpenCV (เฉพาะเฟรมที่ sample = ตรงกับที่ log) ──
+                if viz is not None:
+                    overlay = [
+                        f"pass={pass_type}  frame={frame_index}  y={y:.1f}m  dets={len(dets)}",
+                        f"conf>={detector.conf}  res={cfg.CAM_W}x{cfg.CAM_H}  (press 'q' to stop)",
+                    ]
+                    if viz.show(frame, dets, overlay):
+                        print("[PERCEP] ผู้ใช้กด 'q' — หยุด pass นี้")
+                        n_frames += 1
+                        frame_index += 1
+                        break
+
                 n_frames += 1
                 frame_index += 1
                 if n_frames % 10 == 0:

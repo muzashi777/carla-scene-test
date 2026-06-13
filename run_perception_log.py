@@ -41,6 +41,10 @@ PERCEP_SAMPLE_EVERY_FRAMES = 5       # ใช้เมื่อ PERCEP_SAMPLE_EV
 PERCEP_DRIVE_KMH = 30.0              # ความเร็วเลื่อนกล้อง (ไม่กระทบตำแหน่งที่ sample แบบเมตร)
 PERCEP_SETTLE_TICKS = 20
 
+# เปิดหน้าต่าง OpenCV ดู detection สด ๆ (วาดบนเฟรมที่ sample = ตรงกับที่ log); 'q' = หยุด
+# ตั้ง False เพื่อรัน headless (เซิร์ฟเวอร์ไม่มีจอ/ไม่ได้ติดตั้ง cv2)
+PERCEP_SHOW_WINDOW = True
+
 RESULTS_DIR = cfg.RESULTS_DIR        # เขียนที่ results/perception_log_*.csv (แยกจาก matrix_*)
 
 
@@ -64,20 +68,30 @@ def main():
         cfg.TARGET_CLASSES, cfg.VEHICLE_CLS, cfg.LANE_LEFT, cfg.LANE_RIGHT, cfg.MIN_BOX_H,
     )
 
+    viz = None
+    if PERCEP_SHOW_WINDOW:
+        from perception.percep_viz import PercepViz   # import cv2 เฉพาะตอนเปิดหน้าต่าง
+        viz = PercepViz(cfg)
+
     all_rows = []
     pass_stats = []
-    with CarlaSession(cfg.HOST, cfg.PORT, cfg.TIMEOUT, cfg.FIXED_DT) as sess:
-        print(f"[SIM] sync ON dt={cfg.FIXED_DT}s | perception-logging passes={PERCEP_PASSES}")
-        for pass_type in PERCEP_PASSES:
-            rows, stats = scene_logger.run_pass(
-                sess, cfg, detector, pass_type,
-                sample_every_m=PERCEP_SAMPLE_EVERY_M,
-                sample_every_frames=PERCEP_SAMPLE_EVERY_FRAMES,
-                drive_kmh=PERCEP_DRIVE_KMH,
-                settle_ticks=PERCEP_SETTLE_TICKS,
-            )
-            all_rows.extend(rows)
-            pass_stats.append(stats)
+    try:
+        with CarlaSession(cfg.HOST, cfg.PORT, cfg.TIMEOUT, cfg.FIXED_DT) as sess:
+            print(f"[SIM] sync ON dt={cfg.FIXED_DT}s | perception-logging passes={PERCEP_PASSES}")
+            for pass_type in PERCEP_PASSES:
+                rows, stats = scene_logger.run_pass(
+                    sess, cfg, detector, pass_type,
+                    sample_every_m=PERCEP_SAMPLE_EVERY_M,
+                    sample_every_frames=PERCEP_SAMPLE_EVERY_FRAMES,
+                    drive_kmh=PERCEP_DRIVE_KMH,
+                    settle_ticks=PERCEP_SETTLE_TICKS,
+                    viz=viz,
+                )
+                all_rows.extend(rows)
+                pass_stats.append(stats)
+    finally:
+        if viz is not None:
+            viz.close()
 
     # ── เขียน CSV (1 แถว/1 detection) ──
     os.makedirs(RESULTS_DIR, exist_ok=True)
