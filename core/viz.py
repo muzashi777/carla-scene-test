@@ -79,8 +79,12 @@ class Viz:
         if results:
             for r in results:
                 for b in r.boxes:
+                    conf = float(b.conf[0])
                     x1, y1, x2, y2 = map(int, b.xyxy[0])
                     cv2.rectangle(frame_bgr, (x1, y1), (x2, y2), (0, 200, 0), 1)
+                    label = f"{conf * 100:.0f}%"
+                    cv2.putText(frame_bgr, label, (x1 + 2, max(y1 - 4, 12)),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 200, 0), 1, cv2.LINE_AA)
         # ชั้น 2: กล่อง hazard (ส้ม/แดง = เป้าที่ระบบใช้ตัดสินเบรก)
         self._draw_hazard(frame_bgr, hazard)
         cv2.imshow(self.win, frame_bgr)
