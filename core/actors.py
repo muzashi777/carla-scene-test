@@ -23,29 +23,52 @@ def dist2d(a, b):
     return math.hypot(la.x - lb.x, la.y - lb.y)
 
 
+# ── ค่าคงที่ของ required_decel (กันค่าเพี้ยน/ระเบิดในฉาก cut-in ที่เป้าโผล่ระยะใกล้) ──
+REQ_GAP_EPS  = 0.05    # m   ระยะต่ำกว่านี้ = จวนชน/ทับกันแล้ว → ฉุกเฉินสุด (ขอเบรกเต็ม)
+REQ_VL_STILL = 0.5     # m/s ความเร็ว 'ตามแนวหน้า ego' ต่ำกว่านี้ = ถือว่าสิ่งกีดขวางนิ่ง → d_lead=0
+REQ_AREQ_CAP = 50.0    # m/s² clamp ค่าสูงสุด กันค่าระเบิด (สูงกว่าเพดาน μ·g มากพอให้ urgency=เบรกเต็มแน่นอน)
+
+
 def required_decel(v_e, v_l, a_l, gap):
     """ความหน่วงต่ำสุดที่ ego ต้องใช้เพื่อหยุดให้ทันท้ายรถข้างหน้า (m/s²)
     คำนึงถึง 'ระยะที่รถข้างหน้ายังวิ่งต่อก่อนหยุด' (d_lead = v_l²/2a_l)
-      v_e ≤ v_l            → ไม่ได้เข้าใกล้ → 0
-      v_l ≈ 0              → d_lead = 0 (รถข้างหน้าหยุดแล้ว เช่น dart จอดขวาง)
-      a_l > 0.1            → d_lead = v_l²/2a_l (รถข้างหน้ากำลังเบรก)
-      ไม่เบรก (a_l≈0,v_l>0) → d_lead = inf (ยังไม่ฉุกเฉิน รถข้างหน้าไม่ได้ชะลอ)
-    a_req = v_e² / (2·(gap + d_lead)); คืน inf ถ้าระยะหยุดที่มี ≈ 0 (สายเกินไป)
+      v_e ≤ v_l                 → ไม่ได้เข้าใกล้ → 0
+      gap ≤ REQ_GAP_EPS         → จวนชน → คืน REQ_AREQ_CAP (กันหารศูนย์/ค่าระเบิด) = ขอเบรกเต็ม
+      v_l ≤ REQ_VL_STILL        → d_lead = 0 (สิ่งกีดขวาง 'นิ่ง/ไม่วิ่งไปข้างหน้า' เช่น dart พุ่งตัดข้างแล้วจอด)
+                                   → ลดรูปเป็นเคสสิ่งกีดขวางนิ่ง a_req = v_e²/(2·gap)
+      a_l > 0.1                 → d_lead = v_l²/2a_l (รถข้างหน้ากำลังเบรก)
+      ไม่เบรก (a_l≈0, v_l>REQ_VL_STILL) → d_lead = inf (ยังไม่ฉุกเฉิน รถข้างหน้าวิ่งหนีไปข้างหน้า)
+    คืนค่าจำกัดไว้ที่ REQ_AREQ_CAP เสมอ (ไม่คืน inf/NaN) เพื่อ log/urgency ที่เสถียร
+    v_l ที่ป้อนควรเป็น 'ความเร็วตามแนวการวิ่งของ ego' (longitudinal) — ดู long_speed_along
     ใช้ร่วมทั้งสมองกล (ตัดสินใจ) และ runner (บันทึก a_req ตอนเริ่มเบรก) ให้ตรงกัน
     """
     v_e = max(0.0, v_e); v_l = max(0.0, v_l); a_l = max(0.0, a_l); gap = max(0.0, gap)
     if v_e <= v_l:
         return 0.0
-    if v_l <= 1e-3:
-        d_lead = 0.0
+    if gap <= REQ_GAP_EPS:               # จวนชน/ทับกันแล้ว → ฉุกเฉินสุด
+        return REQ_AREQ_CAP
+    if v_l <= REQ_VL_STILL:
+        d_lead = 0.0                     # นิ่ง/ตัดข้าง → สิ่งกีดขวางนิ่ง (สูตรลดรูป v_e²/2·gap)
     elif a_l > 0.1:
         d_lead = (v_l * v_l) / (2.0 * a_l)
     else:
-        d_lead = math.inf
+        d_lead = math.inf                # วิ่งไปข้างหน้าความเร็วคงที่ ไม่ได้ชะลอ → ยังไม่ฉุกเฉิน
     D = gap + d_lead
     if D <= 1e-6:
-        return math.inf
-    return (v_e * v_e) / (2.0 * D)
+        return REQ_AREQ_CAP
+    return min((v_e * v_e) / (2.0 * D), REQ_AREQ_CAP)
+
+
+def long_speed_along(ego, other):
+    """ความเร็วของ 'other' ตามแนวการวิ่งของ ego (longitudinal, m/s, คืนเฉพาะส่วน ≥0)
+    ใช้ป้อน v_l ให้ required_decel: รถที่ 'พุ่งตัดข้าง' (cut-in/dart-out) มีองค์ประกอบตามแนวหน้า ego ≈ 0
+      → ถูกมองเป็นสิ่งกีดขวางนิ่ง (ไม่ใช่รถนำที่วิ่งหนีไปข้างหน้า) กัน d_lead ระเบิดเป็น inf แล้ว a_req=0
+    ฉาก lead-brake (รถนำวิ่งแนวเดียวกับ ego) ค่านี้ = ความเร็วเต็มอยู่แล้ว จึงนิยามตรงกันทั้งสองฉาก
+    คืน max(0,·): ถ้า other วิ่งเข้าหา ego (ส่วนตามแนวหน้าติดลบ) → 0 (ไม่ช่วยเพิ่มระยะหยุด)
+    """
+    f = ego.get_transform().get_forward_vector()
+    ov = other.get_velocity()
+    return max(0.0, ov.x * f.x + ov.y * f.y)
 
 
 def apply_kinematic_brake(ego, v_model, brake_cmd, mu, dt, g=9.81):

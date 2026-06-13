@@ -15,7 +15,7 @@
 """
 import math
 from control.base_controller import BaseController, register
-from core.actors import required_decel
+from core.actors import required_decel, REQ_GAP_EPS
 
 
 @register("proposed_enhanced")
@@ -31,6 +31,10 @@ class ProposedEnhancedReqDecel(BaseController):
 
     def _desired(self, perc, ego):
         a_max = max(0.0, ego.mu) * self.g0
+        # จวนชน (gap ≤ eps) → urgency สูงสุด เบรกเต็มทันที (กันค่า a_req เพี้ยน/ระเบิดตอน gap→0)
+        if perc.distance <= REQ_GAP_EPS:
+            self.last_a_req, self.last_a_max = a_max, a_max
+            return 1.0
         a_req = required_decel(ego.speed_ms, perc.lead_speed, perc.lead_decel, perc.distance)
         self.last_a_req, self.last_a_max = a_req, a_max
         if a_max <= 1e-6:

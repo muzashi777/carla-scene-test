@@ -123,7 +123,9 @@ def run_case(sess, cfg, case, controller_name, delay_frames, detector, viz=None)
 
         # ── ประมาณความเร็ว/ความหน่วงของ dart จากการเคลื่อนที่จริง (รีเซ็ตทุกเคส) ──
         # ใช้ป้อนสมองกล proposed_enhanced (required-decel) — แชร์เท่ากันทุกสมองกล
-        prev_lead_ms = actors.speed_ms(dart)
+        # ใช้ความเร็ว 'ตามแนวการวิ่งของ ego' (longitudinal): dart พุ่งตัดข้าง → ส่วนนี้ ≈ 0
+        #   → required_decel มอง dart เป็นสิ่งกีดขวางนิ่ง (a_req=v_e²/2·gap) แทนที่จะคิดว่ามันวิ่งหนีไปข้างหน้า
+        prev_lead_ms = actors.long_speed_along(ego, dart)
         lead_decel_ema = 0.0
         rec.a_max = case["mu"] * cfg.GRAVITY     # เพดานความหน่วง μ·g (คงที่ทั้งเคส)
 
@@ -178,8 +180,9 @@ def run_case(sess, cfg, case, controller_name, delay_frames, detector, viz=None)
             prev_gap = gap
             ttc = (gap / rel_speed) if rel_speed > 1e-3 else math.inf
 
-            # ── ความเร็ว/ความหน่วงของ dart (ground-truth, ประมาณจากการเคลื่อนที่จริง) ──
-            lead_ms = actors.speed_ms(dart)
+            # ── ความเร็ว/ความหน่วงของ dart (ground-truth, ตามแนวการวิ่งของ ego) ──
+            # longitudinal: dart พุ่งตัดข้างมีส่วนนี้ ≈ 0 → ถูกมองเป็นสิ่งกีดขวางนิ่งใน required_decel
+            lead_ms = actors.long_speed_along(ego, dart)
             raw_lead_decel = max(0.0, (prev_lead_ms - lead_ms) / cfg.FIXED_DT)
             prev_lead_ms = lead_ms
             lead_decel_ema = 0.3 * raw_lead_decel + 0.7 * lead_decel_ema   # EMA ลด noise
