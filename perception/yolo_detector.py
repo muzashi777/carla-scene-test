@@ -53,3 +53,36 @@ class YoloDetector:
         best_h = max((h for _, h in in_band), default=0.0)
         detected = best_h >= self.min_box_h
         return detected, in_band, best_h
+
+    def _class_name(self, cid):
+        """ชื่อคลาส COCO จาก id (รองรับทั้ง dict และ list ของ model.names)"""
+        names = self.model.names
+        try:
+            return names[cid]
+        except (KeyError, IndexError, TypeError):
+            return str(cid)
+
+    def detect_all(self, frame_bgr):
+        """
+        รัน YOLO บนเฟรมเดียว แล้วคืน 'ทุก detection' ที่โมเดลคืนมา (ไม่กรองเลน/ความสูง)
+        ใช้สำหรับ perception-quality logging (ดู perception/scene_logger.py) เท่านั้น —
+        ไม่เกี่ยวกับเกตเบรกของ AEB (detect()) ใช้ conf/iou/classes/device ชุดเดียวกันเป๊ะ
+        จึงสะท้อนตัวตรวจจับตัวเดียวกับที่ AEB ใช้
+        คืน list ของ dict: {class_id, class_name, confidence, x1, y1, x2, y2}
+        """
+        results = self.model.predict(
+            source=frame_bgr, conf=self.conf, iou=self.iou,
+            classes=self.target_classes, verbose=False, device=self.device,
+        )
+        self.last_results = results
+        dets = []
+        for r in results:
+            for b in r.boxes:
+                cid = int(b.cls[0])
+                x1, y1, x2, y2 = (float(v) for v in b.xyxy[0])
+                dets.append(dict(
+                    class_id=cid, class_name=self._class_name(cid),
+                    confidence=float(b.conf[0]),
+                    x1=x1, y1=y1, x2=x2, y2=y2,
+                ))
+        return dets
