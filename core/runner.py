@@ -115,6 +115,7 @@ def run_case(sess, cfg, case, controller_name, delay_frames, detector, viz=None)
         min_dist = 1e9
         min_gap = 1e9
         peak_decel = 0.0
+        brake_v_model = None     # ความเร็วในโมเดล kinematic (เริ่มจับเมื่อเบรกครั้งแรก) — ดู apply_kinematic_brake
         prev_v_ms = actors.speed_ms(ego)
         result_txt = "TIMEOUT"
         last_frame = None
@@ -204,11 +205,13 @@ def run_case(sess, cfg, case, controller_name, delay_frames, detector, viz=None)
                     rec.a_req_at_brake = actors.required_decel(
                         ego_state.speed_ms, lead_ms, lead_decel_ema, gap)
                 if cfg.BRAKE_MODEL == "kinematic":
-                    # ความหน่วง = แรงเบรก × μ × g (จำกัดตามแรงเสียดทานจริงตามทฤษฎี)
-                    decel_cmd = ctrl.brake * case["mu"] * cfg.GRAVITY
-                    new_v = max(0.0, actors.speed_ms(ego) - decel_cmd * cfg.FIXED_DT)
-                    f = ego.get_transform().get_forward_vector()
-                    ego.set_target_velocity(carla.Vector3D(f.x * new_v, f.y * new_v, 0.0))
+                    # ความหน่วงที่ทำได้จริงถูก clamp ที่เพดานแรงเสียดทาน a_max = μ·g (ดู actors.apply_kinematic_brake)
+                    if brake_v_model is None:
+                        brake_v_model = actors.speed_ms(ego)   # เริ่มจากความเร็วจริงตอนเริ่มเบรก
+                    brake_v_model, a_applied = actors.apply_kinematic_brake(
+                        ego, brake_v_model, ctrl.brake, case["mu"], cfg.FIXED_DT, cfg.GRAVITY)
+                    if brake_engaged and a_applied > peak_decel:
+                        peak_decel = a_applied   # peak_decel = ความหน่วงจริงหลัง clamp (≤ a_max)
                 else:
                     ego.apply_control(ctrl)
             elif not brake_engaged:
@@ -219,7 +222,9 @@ def run_case(sess, cfg, case, controller_name, delay_frames, detector, viz=None)
             v_ms = actors.speed_ms(ego)
             inst_decel = (prev_v_ms - v_ms) / cfg.FIXED_DT if tick > 0 else 0.0
             prev_v_ms = v_ms
-            if brake_engaged and inst_decel > peak_decel:
+            # kinematic: peak_decel มาจากความหน่วงจริงหลัง clamp (≤ a_max) ในขั้นเบรกข้างบนแล้ว
+            # โมเดลอื่น (apply_control): วัด peak จากค่าอ่านกลับความเร็วจริง
+            if brake_engaged and cfg.BRAKE_MODEL != "kinematic" and inst_decel > peak_decel:
                 peak_decel = inst_decel
             mfdd.update(v_kmh, abs(ego_y - ego_y0))
 

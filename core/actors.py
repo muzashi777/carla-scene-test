@@ -48,6 +48,28 @@ def required_decel(v_e, v_l, a_l, gap):
     return (v_e * v_e) / (2.0 * D)
 
 
+def apply_kinematic_brake(ego, v_model, brake_cmd, mu, dt, g=9.81):
+    """ขั้นเบรกแบบ kinematic ที่ 'จำกัดความหน่วงที่ทำได้จริง' ไม่ให้เกินเพดานแรงเสียดทาน a_max = μ·g
+    ──────────────────────────────────────────────────────────────────
+    เหตุผล: ความหน่วงที่ทำได้จริงถูกจำกัดด้วยแรงเสียดทานถนน จึงต้อง a ≤ μ·g เสมอ
+      (สอดคล้องสมมติฐานโมเดล kinematic ทั้งระบบ — ดู README หัวข้อ 'Physics cap on braking deceleration')
+    ติดตามความเร็วจาก 'v_model' (ไม่ใช่ค่าอ่านกลับจาก CARLA) เพื่อกันไม่ให้ฟิสิกส์ภายในของ
+      เอนจินเพิ่มความหน่วงเกินเพดาน ซึ่งจะทำให้รถหยุดเร็วเกินจริง = ประเมินการหลบชนสูงเกินจริง
+    ใช้ร่วม (shared path) ทั้ง runner.py (cut-in) และ runner_lead_brake.py → สมองกลทั้ง 3 ตัวถูก clamp เท่ากัน
+    คืน (v_new, a_applied):
+      v_new     = ความเร็วใหม่ (m/s) ที่ตั้งให้ ego ผ่าน set_target_velocity แล้ว
+      a_applied = ความหน่วงที่ทำได้จริงหลัง clamp (m/s²) → ใช้บันทึกเป็น peak_decel (≤ a_max เสมอ)
+    """
+    a_max = max(0.0, mu) * g
+    a_cmd = max(0.0, brake_cmd) * a_max      # คำสั่งเบรก 0..1 → ความหน่วงที่ขอ (อยู่ในช่วง 0..a_max)
+    a_applied = min(a_cmd, a_max)            # hard clamp กันเกินเพดานแรงเสียดทาน μ·g
+    v_new = max(0.0, v_model - a_applied * dt)
+    f = ego.get_transform().get_forward_vector()
+    ego.set_target_velocity(carla.Vector3D(f.x * v_new, f.y * v_new, 0.0))
+    a_real = (v_model - v_new) / dt if dt > 0 else 0.0   # อาจน้อยกว่า a_applied ตอนความเร็วแตะ 0
+    return v_new, a_real
+
+
 def grab_synced(q, frame_id, timeout=2.0):
     """อ่านภาพจากคิวจนกว่า image.frame ตรง/ใหม่กว่า frame_id (กันภาพดริฟต์ใน sync mode)"""
     while True:
