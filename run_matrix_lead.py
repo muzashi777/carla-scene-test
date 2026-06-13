@@ -67,18 +67,25 @@ def main():
     summary = summarize(records)
     print("\n" + "=" * 60)
     print("สรุปต่อสมองกล (ฉาก lead-brake):")
-    for label, s in summary.items():
-        print(f"  {label:10s} | Rc={s['rc']*100:5.1f}% "
+    # เรียงตามลำดับใน MATRIX_RUNS เพื่ออ่านง่าย (baseline → proposed → proposed_enhanced)
+    labels = [r["label"] for r in cfg.MATRIX_RUNS]
+    for label in labels:
+        if label not in summary:
+            continue
+        s = summary[label]
+        print(f"  {label:18s} | Rc={s['rc']*100:5.1f}% "
               f"({s['avoided']}/{s['n']}) | คะแนนเฉลี่ย={s['mean_score']:.4f}")
 
-    labels = [r["label"] for r in cfg.MATRIX_RUNS]
-    if len(labels) >= 2:
-        base, prop = labels[0], labels[-1]
-        if base in summary and prop in summary:
+    # เทียบทุกสมองกล (ที่ไม่ใช่ baseline) กับ baseline → เช็กเป้า +20% ทีละตัว
+    if labels and labels[0] in summary:
+        base = labels[0]
+        print("-" * 60)
+        for prop in labels[1:]:
+            if prop not in summary:
+                continue
             delta = (summary[prop]["rc"] - summary[base]["rc"]) * 100
-            print("-" * 60)
-            print(f"Δ Rc ({prop} − {base}) = {delta:+.1f} เปอร์เซ็นต์")
-            print(f"เป้า 成果2 (+20%): {'✓ ผ่าน' if delta >= 20 else '✗ ยังไม่ถึง — จูน DYN_K_* หรือ DELAY_FRAMES'}")
+            status = "✓ ผ่าน" if delta >= 20 else "✗ ยังไม่ถึง — จูน DYN_K_* / REQ_*_FRAC หรือ DELAY_FRAMES"
+            print(f"Δ Rc ({prop} − {base}) = {delta:+.1f} เปอร์เซ็นต์  | เป้า 成果2 (+20%): {status}")
     print("=" * 60)
 
 

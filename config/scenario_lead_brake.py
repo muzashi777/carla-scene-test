@@ -111,6 +111,7 @@ SHOW_WINDOW = True                # โชว์หน้าต่าง OpenCV 
 # ══════════════════════════════════════════════════════════════════
 #  TEST MATRIX สำหรับ run_matrix_lead.py (ไล่อัตโนมัติ ไม่มีภาพ)
 #  ฉาก lead-brake = 4 speed × 4 headway × 2 μ = 32 เคส/สมองกล
+#  default เทียบ 3 สมองกล (baseline, proposed, proposed_enhanced) = 96 รัน
 #  (ค่า default: ความเร็วรถนำ = ความเร็ว ego เพราะ LEAD_SAME_AS_EGO=True
 #   และวัดระยะห่างเป็น THW เพราะ USE_THW=True → ไล่ headway_thw)
 # ══════════════════════════════════════════════════════════════════
@@ -122,11 +123,11 @@ MATRIX = dict(
     lead_speed_kmh = [30.0, 50.0],               # ใช้เฉพาะตอน LEAD_SAME_AS_EGO=False
 )
 # เทียบสมองกลไหนบ้าง + หน่วงเฟรมของแต่ละตัว
-#   default ฉาก CCRb นี้เทียบ baseline (TTC คงที่) vs proposed_enhanced (required-decel)
-#   เพิ่มบรรทัด proposed (dynamic-TTC) ได้เพื่อเทียบ 3 ทาง
+#   default ฉาก CCRb นี้เทียบ 3 ทาง: baseline (TTC คงที่) vs proposed (dynamic-TTC)
+#   vs proposed_enhanced (required-decel) — ทั้งหมดบนเคสชุดเดียวกัน delay 0
 MATRIX_RUNS = [
     dict(label="baseline",          controller="baseline",          delay_frames=0),
-    # dict(label="proposed",        controller="proposed",          delay_frames=0),
+    dict(label="proposed",          controller="proposed",          delay_frames=0),
     dict(label="proposed_enhanced", controller="proposed_enhanced", delay_frames=0),
 ]
 RESULTS_DIR = "results"
