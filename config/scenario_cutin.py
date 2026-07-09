@@ -5,6 +5,7 @@
 แก้ค่าทุกอย่างที่นี่ที่เดียว แล้วทั้ง run_single.py และ run_matrix.py จะใช้ตาม
 ค่าฉาก/transform ดึงมาจากต้นแบบ test_spawn_scene03_step3-2.py ที่จูนแล้ว
 """
+import os
 
 # ── การเชื่อมต่อ CARLA ─────────────────────────────────────────────
 HOST = "localhost"
@@ -114,11 +115,45 @@ MATRIX = dict(
 # (สลับได้ 2 ทาง: เปลี่ยน controller หรือเปลี่ยน delay)
 #   default เทียบ 3 สมองกล (baseline, proposed, proposed_enhanced) บนเคสชุดเดียวกัน
 #   proposed_enhanced (required-decel) ลดรูปเป็นเคสสิ่งกีดขวางนิ่งในฉาก cut-in (v_l=0 → a_req=v_e²/2gap)
-MATRIX_RUNS = [
-    dict(label="baseline",          controller="baseline",          delay_frames=0),
-    dict(label="proposed",          controller="proposed",          delay_frames=0),
-    dict(label="proposed_enhanced", controller="proposed_enhanced", delay_frames=0),
-]
+# ── Controllers registered for all test modes ──────────────────────────────────
+# Add new controllers here — build_matrix_runs() picks them up in all modes automatically.
+CONTROLLERS = ["baseline", "proposed", "proposed_enhanced"]
+
+# ── Sweep values for degradation modes (researcher-adjustable) ────────────────
+LATENCY_DELAY_FRAMES = [0, 4, 8, 16]          # = 0, 0.2, 0.4, 0.8 s at FIXED_DT=0.05
+NOISE_SIGMA_M_SWEEP  = [0.0, 0.5, 1.0, 2.0]  # distance noise sigma (m)
+NOISE_SIGMA_VR_SWEEP = [0.0, 0.2, 0.5, 1.0]  # rel_speed / lead_speed noise sigma (m/s)
+DROPOUT_P_SWEEP      = [0.0, 0.05, 0.1, 0.2] # dropout probability per tick
+
+
+def build_matrix_runs(mode="original"):
+    """Return MATRIX_RUNS list for the given test mode.
+
+    TEST_MODE=original  — 3 controllers, all degradation params = 0 (original behaviour)
+    TEST_MODE=latency   — sweep delay_frames across LATENCY_DELAY_FRAMES × controllers
+    TEST_MODE=noise     — sweep noise_sigma_m across NOISE_SIGMA_M_SWEEP × controllers
+    """
+    if mode == "latency":
+        return [
+            dict(label=f"{c}_d{d}f", controller=c, delay_frames=d,
+                 noise_sigma_m=0.0, noise_sigma_vr=0.0, dropout_p=0.0, dropout_mode="freeze")
+            for c in CONTROLLERS for d in LATENCY_DELAY_FRAMES
+        ]
+    if mode == "noise":
+        return [
+            dict(label=f"{c}_nm{sigma_m:.1f}", controller=c, delay_frames=0,
+                 noise_sigma_m=sigma_m, noise_sigma_vr=0.0, dropout_p=0.0, dropout_mode="freeze")
+            for c in CONTROLLERS for sigma_m in NOISE_SIGMA_M_SWEEP
+        ]
+    # "original" (default) — identical to prior hardcoded MATRIX_RUNS
+    return [
+        dict(label=c, controller=c, delay_frames=0,
+             noise_sigma_m=0.0, noise_sigma_vr=0.0, dropout_p=0.0, dropout_mode="freeze")
+        for c in CONTROLLERS
+    ]
+
+
+MATRIX_RUNS = build_matrix_runs(os.environ.get("TEST_MODE", "original"))
 RESULTS_DIR = "results"
 
 # ══════════════════════════════════════════════════════════════════

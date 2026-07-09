@@ -86,11 +86,42 @@ python run_matrix_lead.py                    # code default LEAD_DECEL=4.0 (mode
 
 **Summarise results from existing CSVs (no CARLA needed):**
 ```bash
-python core/report.py results/matrix_*.csv
-python core/report.py results/lead_matrix_*.csv
+python -m core.report results/matrix_*.csv
+python -m core.report results/lead_matrix_*.csv
 ```
 
 > Lead-brake results are prefixed `lead_matrix_` (set by `RESULTS_PREFIX`), clearly separated from cut-in results (`matrix_`).
+
+---
+
+## Test Modes
+
+A `TEST_MODE` environment variable selects the degradation sweep. The degradation layer (`perception/degrade.py`) sits between the perception pipeline and every controller — all three controllers receive the same degraded input per run, preserving fairness.
+
+| `TEST_MODE` | What it does | Runs (cut-in) |
+|---|---|---|
+| `original` (default) | All degradation params = 0; identical to original behaviour | 3 |
+| `latency` | Sweep `delay_frames` ∈ {0, 4, 8, 16} (0–0.8 s) × 3 controllers | 12 |
+| `noise` | Sweep `noise_sigma_m` ∈ {0.0, 0.5, 1.0, 2.0} m × 3 controllers | 12 |
+
+**Run on server:**
+```bash
+# Original (paper results — no degradation)
+python run_matrix.py
+LEAD_DECEL=6.0 python run_matrix_lead.py
+
+# Latency sweep
+TEST_MODE=latency python run_matrix.py
+TEST_MODE=latency LEAD_DECEL=6.0 python run_matrix_lead.py
+
+# Noise sweep
+TEST_MODE=noise python run_matrix.py
+TEST_MODE=noise LEAD_DECEL=6.0 python run_matrix_lead.py
+```
+
+Sweep constants (`LATENCY_DELAY_FRAMES`, `NOISE_SIGMA_M_SWEEP`, etc.) are defined at the top of each config file and can be freely adjusted.
+
+> `TEST_MODE=original` (or unset) produces exactly the same results as the original code — the degrader is a strict no-op when all parameters are 0.
 
 ---
 

@@ -18,6 +18,7 @@ from core.types import Perception, EgoState
 from core.metrics import MfddTracker
 from core.conflict import lead_brake_is_conflict
 from control.base_controller import make_controller
+from perception.degrade import PerceptionDegrader
 # import เพื่อให้ register() ทำงาน (ขึ้นทะเบียนชื่อ controller)
 import control.baseline_static_ttc   # noqa: F401
 import control.proposed_dynamic_ttc  # noqa: F401
@@ -49,14 +50,23 @@ class LeadBrakeRecord:
     a_max: float = 0.0             # m/s² เพดานความหน่วง = μ·g ของเคสนี้
     is_conflict: bool = True       # True = ego ชน (kinematic, no-brake) — ดู core/conflict.py
     result_txt: str = ""
+    noise_sigma_m: float = 0.0
+    noise_sigma_vr: float = 0.0
+    dropout_p: float = 0.0
+    dropout_mode: str = "freeze"
+    test_mode: str = "original"
+    seed: int = 0
 
 
-def run_case(sess, cfg, case, controller_name, delay_frames, detector, viz=None):
+def run_case(sess, cfg, case, controller_name, delay_frames, detector,
+             run_spec=None, case_idx=0, test_mode="original", viz=None):
     world = sess.world
     actor_list = []
     front_q = queue.Queue()
     top_q = queue.Queue()
     collision = {"hit": False, "with": None}
+    spec = run_spec or {}
+    _seed = (sum(ord(c) for c in spec.get("label", controller_name)) * 10000 + case_idx) % (2**32)
 
     # ── ระยะห่างรถนำ: THW (วินาที) → เมตรจริง  หรือ  ระยะคงที่ (โหมดเดิม) ──
     # THW อิงความเร็ว "ego" เสมอ (เราเป็นคนตามรถนำ) แม้เปิด lead_speed ต่างจาก ego
@@ -83,6 +93,12 @@ def run_case(sess, cfg, case, controller_name, delay_frames, detector, viz=None)
         mu=case["mu"], headway_thw=headway_thw, headway_d=headway_d,
         is_conflict=is_conflict,
     )
+    rec.noise_sigma_m  = spec.get("noise_sigma_m", 0.0)
+    rec.noise_sigma_vr = spec.get("noise_sigma_vr", 0.0)
+    rec.dropout_p      = spec.get("dropout_p", 0.0)
+    rec.dropout_mode   = spec.get("dropout_mode", "freeze")
+    rec.test_mode      = test_mode
+    rec.seed           = _seed
 
     try:
         # ── EGO ──
@@ -135,10 +151,20 @@ def run_case(sess, cfg, case, controller_name, delay_frames, detector, viz=None)
         # ── เตรียมสมองกล + ฉาก ──
         controller = make_controller(controller_name, cfg)
         controller.reset()
+        degrader = PerceptionDegrader(
+            delay_frames=delay_frames,
+            noise_sigma_m=spec.get("noise_sigma_m", 0.0),
+            noise_sigma_vr=spec.get("noise_sigma_vr", 0.0),
+            dropout_p=spec.get("dropout_p", 0.0),
+            dropout_mode=spec.get("dropout_mode", "freeze"),
+            seed=_seed,
+        )
+        degrader.reset()
         scen = LeadBrakeScenario(ego, lead, cfg, case)
         scen.start()
 
-        det_buffer = deque(maxlen=delay_frames + 1)
+        # Latency is handled entirely by PerceptionDegrader — this buffer is a no-op (maxlen=1).
+        det_buffer = deque(maxlen=1)
         mfdd = MfddTracker(case["ego_speed_kmh"])
         ego_y0 = ego.get_location().y
 
@@ -234,11 +260,12 @@ def run_case(sess, cfg, case, controller_name, delay_frames, detector, viz=None)
             det_buffer.append(detected_now)
             perceived = det_buffer[0]
 
-            perc = Perception(detected=perceived, distance=gap,
+            perc = Perception(detected=detected_now, distance=gap,
                               rel_speed=rel_speed, ttc=ttc, box_h=box_h,
                               lead_speed=lead_ms, lead_decel=lead_decel_ema)
             ego_state = EgoState(speed_ms=actors.speed_ms(ego),
                                  speed_kmh=v_kmh, mu=case["mu"])
+            perc, ego_state = degrader.apply(perc, ego_state)
 
             # ── สมองกลตัดสินใจ ──
             ctrl = controller.decide(perc, ego_state)

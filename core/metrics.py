@@ -49,6 +49,12 @@ class RunRecord:
     a_max: float = 0.0             # m/s² เพดานความหน่วง = μ·g ของเคสนี้
     is_conflict: bool = True       # True = เคสนี้ ego ชน (kinematic, no-brake) — ดู core/conflict.py
     result_txt: str = ""
+    noise_sigma_m: float = 0.0
+    noise_sigma_vr: float = 0.0
+    dropout_p: float = 0.0
+    dropout_mode: str = "freeze"
+    test_mode: str = "original"
+    seed: int = 0
 
 
 def score_clearance(s, avoided):

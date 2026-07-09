@@ -168,6 +168,20 @@ lead_decel_ema = 0.3 * raw_decel + 0.7 * lead_decel_ema
 
 `LEAD_DECEL` is never read from config directly by the controller — it is estimated via finite differences and EMA for realism.
 
+### Step 4b — Perception Degradation (optional, `TEST_MODE` ≠ `original`)
+
+`PerceptionDegrader.apply(perc, ego)` is called after Step 4 and before the controller. It applies three degradations in order:
+
+1. **Latency** — FIFO buffer of length `delay_frames + 1`; controller receives the Perception from `delay_frames` ticks ago. Covers all fields (`distance`, `rel_speed`, `lead_speed`, `ttc`, `detected`). The old `det_buffer` (delayed only `detected`) is replaced by this; latency is counted once.
+2. **Gaussian noise** — adds `N(0, noise_sigma_m)` to `distance` (clamped ≥ 0) and `N(0, noise_sigma_vr)` to `rel_speed` and `lead_speed`; `ttc` is recomputed from the noisy values.
+3. **Dropout** — per-tick Bernoulli(`dropout_p`); on dropout, either freeze (return last-valid Perception) or miss (force `detected=False`).
+
+`TEST_MODE=original` (default): all parameters are 0 → degrader is a strict no-op → original behaviour preserved exactly.
+
+Seeding: each run's RNG is seeded from `(label_chars_sum × 10000 + case_idx) % 2^32` for reproducibility.
+
+All three controllers receive the same degraded input per run (fairness).
+
 ### Step 5 — Ego Brake Model (kinematic, friction-limited)
 
 ```python
@@ -277,6 +291,12 @@ Five CPEIM indices are logged per run in every CSV:
 | `a_max` | Friction ceiling = μ·g (m/s²) |
 | `min_dist`, `result_txt` | Minimum centre-to-centre distance / text result summary |
 | `is_conflict` | ★ `True` = ego at constant speed would collide within 20 s (kinematic, pre-sim) |
+| `noise_sigma_m` | Distance noise sigma used (m); 0.0 = no noise |
+| `noise_sigma_vr` | Velocity noise sigma used (m/s); 0.0 = no noise |
+| `dropout_p` | Per-tick dropout probability; 0.0 = no dropout |
+| `dropout_mode` | `"freeze"` or `"miss"` — dropout behaviour (see `perception/degrade.py`) |
+| `test_mode` | `TEST_MODE` env value at run time (`"original"`, `"latency"`, `"noise"`) |
+| `seed` | RNG seed used for this run (deterministic reproduction) |
 
 ### Lead-brake results (`results/lead_matrix_*.csv`)
 
@@ -328,14 +348,11 @@ This equation is **expository only** — it is not executed at runtime. It motiv
 | File | `config/scenario_cutin.py:100`, `config/scenario_lead_brake.py:114` (config); `core/runner.py:97–198`, `core/runner_lead_brake.py:141–235` (runtime) |
 | Value in all matrix runs | **0 s** (= 0 frames × 0.05 s/frame) |
 
-**Mechanism:** A FIFO deque of length `delay_frames + 1`. With `delay_frames = 0`, `maxlen = 1`, so the controller always reads the current-frame detection — zero latency. The mechanism supports non-zero delay (e.g. 16 frames = 0.8 s) but all production runs use 0.
+**Mechanism (updated):** Latency is now handled by `PerceptionDegrader` (see Section 4 Step 4b). The old `det_buffer` in `runner.py` / `runner_lead_brake.py` is a no-op (`maxlen=1`). `PerceptionDegrader` delays the **full Perception object** (all fields including `distance`, `rel_speed`, `lead_speed`, `detected`), not just the detection boolean. This makes `delay_frames` a genuine end-to-end perception latency variable.
 
-```python
-det_buffer = deque(maxlen=delay_frames + 1)
-...
-det_buffer.append(detected_now)
-perceived = det_buffer[0]
-```
+`delay_frames=0` (default for `TEST_MODE=original`): degrader buffer has `maxlen=1`; controller always receives the current-frame Perception — identical to original behaviour.
+
+To sweep latency: `TEST_MODE=latency python run_matrix.py` (see Section 4 Step 4b and README Test Modes).
 
 ### t_s — Brake Build-up (Ramp) Time
 
@@ -738,11 +755,43 @@ The following were **not modified** in any revision:
 - Controller decision logic (`baseline_static_ttc`, `proposed_dynamic_ttc`, `proposed_enhanced`)
 - MFDD formula in `MfddTracker`
 - Kinematic brake cap (`apply_kinematic_brake`, `peak_decel ≤ a_max`)
-- Existing CSV column names (only `is_conflict` was added)
+- Existing CSV column names (only new columns appended; no old columns changed)
 - `FRAME_SYNC = True` and `FIXED_DT = 0.05` (simulation determinism)
-- Cut-in / lead-brake scene logic (apart from config changes)
+- Cut-in / lead-brake scene logic
 - Existing result files in `results/` (read-only)
 
 ---
 
-*This document was generated from: `CODE_CHANGES.md`, `REVIEW.md`, `docs/brake_timing_params.md`, and `review_yolo_tablev.md`. Last updated: 2026-07-09.*
+### Degradation Layer — July 2026
+
+**Purpose:** Add latency and sensor noise as independent test variables without modifying any controller logic. All three controllers receive the same degraded input per run (fairness preserved).
+
+#### New files
+
+| File | Purpose |
+|---|---|
+| `perception/degrade.py` | `PerceptionDegrader` — latency buffer + Gaussian noise + dropout |
+| `tests/test_degrade.py` | Unit tests (no CARLA): no-op, delay, determinism, dropout modes |
+| `CHANGES_degradation.md` | Change summary for this feature |
+
+#### Modified files
+
+| File | Change | Lines added/changed |
+|---|---|---|
+| `core/metrics.py` | Add 6 fields to `RunRecord` (degradation params + seed) | +6 |
+| `core/runner_lead_brake.py` | Add 6 fields to `LeadBrakeRecord`; import + wire degrader; det_buffer no-op | +23 |
+| `core/runner.py` | Import + wire degrader; det_buffer no-op; pass degraded perc to controller | +22 |
+| `config/scenario_cutin.py` | `import os`; `CONTROLLERS`; sweep constants; `build_matrix_runs(mode)`; dynamic `MATRIX_RUNS` | +40 |
+| `config/scenario_lead_brake.py` | Same additions as cutin config | +39 |
+| `run_matrix.py` | Use `cfg.build_matrix_runs(test_mode)`; pass `run_spec/case_idx/test_mode` | +6 |
+| `run_matrix_lead.py` | Same as run_matrix.py | +6 |
+| `README.md` | Add Test Modes section | +28 |
+| `TECHNICAL_DOC.md` | Update Sections 4, 7, 9, 12 | +30 |
+
+**Controller files not touched:** `baseline_static_ttc.py`, `proposed_dynamic_ttc.py`, `proposed_enhanced.py` — verified with `git diff HEAD`.
+
+**Original mode unchanged:** `TEST_MODE=original` (default) → `PerceptionDegrader` with all params = 0 is a strict no-op; output equals original code on all existing test cases.
+
+---
+
+*This document was generated from: `CODE_CHANGES.md`, `REVIEW.md`, `docs/brake_timing_params.md`, `review_yolo_tablev.md`, and `CHANGES_degradation.md`. Last updated: 2026-07-09.*

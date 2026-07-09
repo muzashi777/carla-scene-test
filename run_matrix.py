@@ -24,21 +24,24 @@ def build_cases():
 
 
 def main():
+    test_mode = os.environ.get("TEST_MODE", "original")
+    matrix_runs = cfg.build_matrix_runs(test_mode)
     detector = YoloDetector(
         cfg.YOLO_MODEL, cfg.YOLO_DEVICE, cfg.CONF_THRESH, cfg.IOU_THRESH,
         cfg.TARGET_CLASSES, cfg.VEHICLE_CLS, cfg.LANE_LEFT, cfg.LANE_RIGHT, cfg.MIN_BOX_H,
     )
     cases = build_cases()
-    print(f"[MATRIX] {len(cases)} เคส/สมองกล × {len(cfg.MATRIX_RUNS)} สมองกล "
-          f"= {len(cases)*len(cfg.MATRIX_RUNS)} รัน")
+    print(f"[MATRIX] {len(cases)} เคส/สมองกล × {len(matrix_runs)} runs "
+          f"= {len(cases)*len(matrix_runs)} รัน  TEST_MODE={test_mode}")
 
     records = []
     with CarlaSession(cfg.HOST, cfg.PORT, cfg.TIMEOUT, cfg.FIXED_DT) as sess:
-        for run in cfg.MATRIX_RUNS:
+        for run in matrix_runs:
             for i, case in enumerate(cases):
                 print(f"\n--- [{run['label']}] เคส {i+1}/{len(cases)} {case} ---")
                 rec, _ = run_case(sess, cfg, case, run["controller"],
-                                  run["delay_frames"], detector, viz=None)
+                                  run.get("delay_frames", 0), detector,
+                                  run_spec=run, case_idx=i, test_mode=test_mode, viz=None)
                 rec.label = run["label"]
                 records.append(rec)
 
@@ -52,7 +55,7 @@ def main():
     summary = summarize(records)
     print("\n" + "=" * 72)
     print("สรุปต่อสมองกล (ฉาก cut-in):")
-    labels = [r["label"] for r in cfg.MATRIX_RUNS]
+    labels = [r["label"] for r in matrix_runs]
     for label in labels:
         if label not in summary:
             continue
@@ -74,6 +77,7 @@ def main():
             status = "✓ ผ่าน" if delta >= 20 else "✗ ยังไม่ถึง — จูน DYN_K_* / REQ_*_FRAC หรือ DELAY_FRAMES"
             print(f"Δ Rc ({prop} − {base}) = {delta:+.1f}%  | เป้า +20%: {status}")
     print("=" * 72)
+    print(f"[TEST_MODE={test_mode}]  CSV: {csv_path}")
 
 
 if __name__ == "__main__":
