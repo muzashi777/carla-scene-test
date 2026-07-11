@@ -70,6 +70,7 @@ class PerceptionPredictor:
         # closing-speed gain = ความเร็วที่เป้าเสียไปจริง (cap ที่การหยุดสนิท)
         dv_close = perc.lead_speed - out.lead_speed   # = min(lead_decel*L, lead_speed) เสมอ ไม่ overshoot
         rel_pred = v_close + dv_close
+        
         out.rel_speed = rel_pred
         out.ttc = (out.distance / rel_pred) if rel_pred > 1e-3 else math.inf
         # detected / box_h: passed through unchanged (prediction does not create detections)
