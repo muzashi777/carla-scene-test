@@ -55,6 +55,8 @@ class RunRecord:
     dropout_mode: str = "freeze"
     test_mode: str = "original"
     seed: int = 0
+    comp_source: str = ""          # แหล่งค่า L ที่ใช้ชดเชย (''=ไม่ชดเชย, 'oracle', 'mismatched')
+    comp_L_frames: int = 0         # L ที่ใช้ชดเชยจริง (เฟรม) — อาจ ≠ delay_frames ในโหมด mismatched
 
 
 def score_clearance(s, avoided):

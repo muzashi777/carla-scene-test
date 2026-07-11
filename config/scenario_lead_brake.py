@@ -141,13 +141,28 @@ NOISE_SIGMA_M_SWEEP  = [0.0, 0.5, 1.0, 2.0]  # distance noise sigma (m)
 NOISE_SIGMA_VR_SWEEP = [0.0, 0.2, 0.5, 1.0]  # rel_speed / lead_speed noise sigma (m/s)
 DROPOUT_P_SWEEP      = [0.0, 0.05, 0.1, 0.2] # dropout probability per tick
 
+# ── Latency-compensation experiment (latency_comp / latency_mismatch) ─────────
+#   comp controllers ชดเชย perception latency: enhanced_predictive (predictor) /
+#   enhanced_inflation (threshold inflation). proposed_enhanced = control (ไม่ชดเชย),
+#   proposed = crossover reference. ดู control/enhanced_*.py และ CHANGES_latency_compensation.md
+COMP_CONTROLLERS      = ["proposed_enhanced", "enhanced_predictive",
+                         "enhanced_inflation", "proposed"]
+COMP_MISMATCH_CTRL    = "enhanced_predictive"  # ตัวที่กวาด mismatch (ไวต่อ delay-mismatch สุด)
+COMP_MISMATCH_DELAY   = 8                       # delay จริงที่ฉีดคงที่ (เฟรม) ในโหมด mismatch
+COMP_MISMATCH_L_FRAMES = [4, 8, 12, 16]         # L' ที่ใช้ชดเชย: under(4) / exact(8) / over(12,16)
+COMP_R_SAFE           = 0.0                      # ระยะเผื่อยืนหยุดของ enhanced_inflation (m)
+
 
 def build_matrix_runs(mode="original"):
     """Return MATRIX_RUNS list for the given test mode.
 
-    TEST_MODE=original  — 3 controllers, all degradation params = 0 (original behaviour)
-    TEST_MODE=latency   — sweep delay_frames across LATENCY_DELAY_FRAMES × controllers
-    TEST_MODE=noise     — sweep noise_sigma_m across NOISE_SIGMA_M_SWEEP × controllers
+    TEST_MODE=original        — 3 controllers, all degradation params = 0 (original behaviour)
+    TEST_MODE=latency         — sweep delay_frames across LATENCY_DELAY_FRAMES × controllers
+    TEST_MODE=noise           — sweep noise_sigma_m across NOISE_SIGMA_M_SWEEP × controllers
+    TEST_MODE=latency_comp    — COMP_CONTROLLERS × delay sweep × comp_source=oracle
+                                (upper bound: รู้ L เป๊ะ กู้ Rc ได้แค่ไหน)
+    TEST_MODE=latency_mismatch— enhanced_predictive × delay คงที่ × comp_L_frames กวาด
+                                (ความเปราะเมื่อประมาณ L ผิด: under/exact/over-compensate)
     """
     if mode == "latency":
         return [
@@ -160,6 +175,23 @@ def build_matrix_runs(mode="original"):
             dict(label=f"{c}_nm{sigma_m:.1f}", controller=c, delay_frames=0,
                  noise_sigma_m=sigma_m, noise_sigma_vr=0.0, dropout_p=0.0, dropout_mode="freeze")
             for c in CONTROLLERS for sigma_m in NOISE_SIGMA_M_SWEEP
+        ]
+    if mode == "latency_comp":
+        # oracle: ชดเชยด้วย L = delay จริงที่ฉีด (comp_L_frames = delay_frames)
+        return [
+            dict(label=f"{c}_d{d}f", controller=c, delay_frames=d,
+                 comp_source="oracle", comp_L_frames=d,
+                 noise_sigma_m=0.0, noise_sigma_vr=0.0, dropout_p=0.0, dropout_mode="freeze")
+            for c in COMP_CONTROLLERS for d in LATENCY_DELAY_FRAMES
+        ]
+    if mode == "latency_mismatch":
+        # mismatched: delay จริงคงที่ แต่ชดเชยด้วย L' ที่ต่างออกไป (under/exact/over)
+        d = COMP_MISMATCH_DELAY
+        return [
+            dict(label=f"{COMP_MISMATCH_CTRL}_d{d}f_L{cl}f", controller=COMP_MISMATCH_CTRL,
+                 delay_frames=d, comp_source="mismatched", comp_L_frames=cl,
+                 noise_sigma_m=0.0, noise_sigma_vr=0.0, dropout_p=0.0, dropout_mode="freeze")
+            for cl in COMP_MISMATCH_L_FRAMES
         ]
     # "original" (default) — identical to prior hardcoded MATRIX_RUNS
     return [

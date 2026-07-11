@@ -103,6 +103,8 @@ A `TEST_MODE` environment variable selects the degradation sweep. The degradatio
 | `original` (default) | All degradation params = 0; identical to original behaviour | 3 |
 | `latency` | Sweep `delay_frames` ∈ {0, 4, 8, 16} (0–0.8 s) × 3 controllers | 12 |
 | `noise` | Sweep `noise_sigma_m` ∈ {0.0, 0.5, 1.0, 2.0} m × 3 controllers | 12 |
+| `latency_comp` | Sweep `delay_frames` × `COMP_CONTROLLERS` with `comp_source=oracle` (L known exactly). Measures how much of the latency-induced Rc loss each compensator recovers — an **upper bound**. | 16 |
+| `latency_mismatch` | `enhanced_predictive` at a fixed injected delay (`COMP_MISMATCH_DELAY=8`) while sweeping the *compensated* `comp_L_frames` ∈ {4, 8, 12, 16} (under-/exact-/over-compensate). Measures **fragility** to mis-estimating L. | 4 |
 
 **Run on server:**
 ```bash
@@ -117,9 +119,17 @@ TEST_MODE=latency LEAD_DECEL=6.0 python run_matrix_lead.py
 # Noise sweep
 TEST_MODE=noise python run_matrix.py
 TEST_MODE=noise LEAD_DECEL=6.0 python run_matrix_lead.py
+
+# Latency compensation — upper bound (L known exactly)
+TEST_MODE=latency_comp python run_matrix.py
+TEST_MODE=latency_comp LEAD_DECEL=6.0 python run_matrix_lead.py
+
+# Latency compensation — fragility to mis-estimated L
+TEST_MODE=latency_mismatch python run_matrix.py
+TEST_MODE=latency_mismatch LEAD_DECEL=6.0 python run_matrix_lead.py
 ```
 
-Sweep constants (`LATENCY_DELAY_FRAMES`, `NOISE_SIGMA_M_SWEEP`, etc.) are defined at the top of each config file and can be freely adjusted.
+Sweep constants (`LATENCY_DELAY_FRAMES`, `NOISE_SIGMA_M_SWEEP`, `COMP_CONTROLLERS`, `COMP_MISMATCH_DELAY`, `COMP_MISMATCH_L_FRAMES`, etc.) are defined at the top of each config file and can be freely adjusted.
 
 > `TEST_MODE=original` (or unset) produces exactly the same results as the original code — the degrader is a strict no-op when all parameters are 0.
 
@@ -148,8 +158,20 @@ Sweep constants (`LATENCY_DELAY_FRAMES`, `NOISE_SIGMA_M_SWEEP`, etc.) are define
 | `baseline` | Static TTC | `control/baseline_static_ttc.py` |
 | `proposed` | Adaptive TTC | `control/proposed_dynamic_ttc.py` |
 | `proposed_enhanced` | Required-Deceleration | `control/proposed_enhanced.py` |
+| `enhanced_predictive` | Required-Decel + Latency Predictor | `control/enhanced_predictive.py` |
+| `enhanced_inflation` | Required-Decel + Threshold Inflation | `control/enhanced_inflation.py` |
 
 All controllers receive the same `Perception`/`EgoState` inputs; differences arise purely from decision logic.
+
+**Latency-compensated controllers** (`enhanced_predictive`, `enhanced_inflation`) extend
+`proposed_enhanced` to counteract perception latency `L`. `enhanced_predictive` extrapolates
+the target state forward by `L` (feedforward predictor) and feeds the predicted inputs into
+the *same* `required_decel()`; `enhanced_inflation` adds the distance travelled during `L`
+(`v_close·L`) to the required stopping distance (worst-case robust). At `L=0` both reduce to
+`proposed_enhanced` / no compensation. They read `L` from the run spec via `comp_source`
+(`oracle` = exact injected delay, `mismatched` = a separately swept `comp_L_frames`); no
+runner/metrics changes are required. See `CHANGES_latency_compensation.md` and the
+`latency_comp` / `latency_mismatch` test modes below.
 
 ---
 
@@ -189,6 +211,6 @@ Results are written to `results/`:
 - `matrix_*.csv` — cut-in runs
 - `lead_matrix_*.csv` — lead-brake runs (prefixed by `RESULTS_PREFIX`)
 
-Key CSV columns: `label`, `controller`, `ego_speed_kmh`, `mu`, `avoided`, `s_clearance` (surface gap, m), `a_b_mfdd` (MFDD, m/s²), `t_c_warn` (TTC at brake onset, s), `dv_speed_var` (Δv, km/h), `is_conflict`, `peak_decel`, `a_max`.
+Key CSV columns: `label`, `controller`, `ego_speed_kmh`, `mu`, `avoided`, `s_clearance` (surface gap, m), `a_b_mfdd` (MFDD, m/s²), `t_c_warn` (TTC at brake onset, s), `dv_speed_var` (Δv, km/h), `is_conflict`, `peak_decel`, `a_max`. Latency-compensation runs add `comp_source` (`""`/`oracle`/`mismatched`) and `comp_L_frames` (the L actually used to compensate, in frames — may differ from `delay_frames` under `mismatched`). These columns default empty/0, so older CSVs still load in `report.py`.
 
 Run `python core/report.py results/*.csv` for a per-controller CPEIM summary table.

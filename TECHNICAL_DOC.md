@@ -241,7 +241,70 @@ Cut-in scene: `v_lead = 0 → d_lead = 0 → a_req = v_e² / (2 × gap)` (statio
 | `PARTIAL_BRAKE` | 0.4 | all three |
 | `DYN_V0`, `DYN_MU0` | 40 km/h, 0.85 | proposed |
 | `DYN_K_SPEED`, `DYN_K_MU` | 1.2, 1.5 | proposed |
-| `REQ_FULL_FRAC`, `REQ_WARN_FRAC` | 0.9, 0.6 | proposed_enhanced |
+| `REQ_FULL_FRAC`, `REQ_WARN_FRAC` | 0.9, 0.6 | proposed_enhanced, enhanced_predictive, enhanced_inflation |
+| `COMP_R_SAFE` | 0.0 m | enhanced_inflation |
+
+---
+
+### Latency-Compensated Controllers
+
+Both extend `proposed_enhanced` to counteract a **known** perception latency `L` (seconds).
+`L = comp_L_frames × FIXED_DT`, sourced from the run spec via
+`compensation_latency(run_spec, cfg)` in `control/base_controller.py`. Decision gate, brake
+latch, urgency thresholds, and the μ·g ceiling are all inherited unchanged — only the inputs
+to the required-decel computation differ.
+
+**Conceptual framing (feedforward predictor).** Compensation predicts the target state
+forward by `L` and decides on the *predicted* state instead of the stale (latency-delayed)
+one — a discrete analog of a Smith predictor. The principle is borrowed from delay
+compensation in cooperative ACC / time-delay control (Xing, Ploeg & Nijmeijer 2019; Richard
+2003), **not** from AEB-native work.
+
+**`enhanced_predictive` — feedforward predictor (`control/enhanced_predictive.py`), main method.**
+Constant-acceleration extrapolation of the *inputs* to the existing `required_decel()`.
+Before the ego brakes, `a_ego ≈ 0`, so the closing acceleration is `a_close = +lead_decel`
+(the lead braking makes the gap close faster):
+
+```
+v_l_pred = max(0, lead_speed - lead_decel · L)            # lead keeps decelerating
+gap_pred = max(0, distance - v_close · L - 0.5 · lead_decel · L²)   # v_close = rel_speed (closing)
+a_req    = required_decel(ego.speed_ms, v_l_pred, lead_decel, gap_pred)   # SAME formula
+urgency  = a_req / (μ·g)                                  # SAME full/partial thresholds
+```
+
+Because it extrapolates the *inputs* (not a new closed form), at `L=0` it calls
+`required_decel(speed_ms, lead_speed, lead_decel, distance)` — **identical to
+`proposed_enhanced` on every tick** (verified in `tests/test_latency_comp.py`).
+
+**`enhanced_inflation` — threshold inflation (`control/enhanced_inflation.py`), worst-case robust.**
+Does not predict the target; it adds the distance the ego travels during `L` to the required
+stopping distance:
+
+```
+r_required = v_close² / (2·μ·g) + v_close · L            # physics stop dist + latency creep
+urgency    = r_required / max(ε, gap - COMP_R_SAFE)      # ≥1 ⇒ not enough room
+  urgency ≥ REQ_FULL_FRAC → full brake ; ≥ REQ_WARN_FRAC → partial
+```
+
+Advantage: needs only an **upper bound** `L_max`, not exact `L`. The `v_close·L` term is the
+standard delay term in Mazda/Berkeley-PATH safety-distance formulas (Rajamani 2012). At `L=0`
+the inflation term vanishes → non-compensated behaviour.
+
+**Oracle vs mismatched (the experiment).** The predictor must know `L`. In this simulator the
+harness *injects* `L`, so it can be known exactly — this is an **oracle / idealized upper
+bound** on Rc recovery. Two `comp_source` values drive the two research questions:
+
+| `comp_source` | Compensated L | Research question |
+|---|---|---|
+| `oracle` | `L = delay_frames · dt` (exact injected delay) | Upper bound: if `L` is known exactly, how much Rc is recovered? |
+| `mismatched` | `L = comp_L_frames · dt`, set independently of `delay_frames` | Fragility: how does Rc degrade under under-/over-compensation? |
+
+> **Why online L-measurement (timestamp) is future work.** Measuring `L` from sensor
+> timestamps has no uncertainty *in simulation* — the timestamp equals the value we injected,
+> so there is nothing to test. We therefore emulate "not knowing `L`" with the `mismatched`
+> sweep (grounded in Richard 2003, which shows predictor-based control is sensitive to
+> delay-mismatch). True online `L` estimation belongs to perception-in-the-loop testing; MPC
+> and timestamp-jitter variants are likewise deferred.
 
 ---
 
@@ -295,8 +358,13 @@ Five CPEIM indices are logged per run in every CSV:
 | `noise_sigma_vr` | Velocity noise sigma used (m/s); 0.0 = no noise |
 | `dropout_p` | Per-tick dropout probability; 0.0 = no dropout |
 | `dropout_mode` | `"freeze"` or `"miss"` — dropout behaviour (see `perception/degrade.py`) |
-| `test_mode` | `TEST_MODE` env value at run time (`"original"`, `"latency"`, `"noise"`) |
+| `test_mode` | `TEST_MODE` env value at run time (`"original"`, `"latency"`, `"noise"`, `"latency_comp"`, `"latency_mismatch"`) |
 | `seed` | RNG seed used for this run (deterministic reproduction) |
+| `comp_source` | Latency-compensation source: `""` (none), `"oracle"` (L = injected delay), `"mismatched"` (L set independently) |
+| `comp_L_frames` | L actually used to compensate (frames); may differ from `delay_frames` under `mismatched`. `L_seconds = comp_L_frames × FIXED_DT` |
+
+> `comp_source`/`comp_L_frames` default to `""`/`0`, so CSVs written before this feature still
+> load unchanged in `core/report.py` (tolerant `.get`). Both scenarios share these two columns.
 
 ### Lead-brake results (`results/lead_matrix_*.csv`)
 
@@ -794,4 +862,51 @@ The following were **not modified** in any revision:
 
 ---
 
-*This document was generated from: `CODE_CHANGES.md`, `REVIEW.md`, `docs/brake_timing_params.md`, `review_yolo_tablev.md`, and `CHANGES_degradation.md`. Last updated: 2026-07-09.*
+### Latency Compensation — July 2026
+
+**Purpose:** Add two controllers that compensate a known perception latency `L` to recover
+the Rc lost under latency, plus test modes measuring the upper bound (L known exactly) and
+fragility (L mis-estimated). No controller decision logic changed; no CARLA/matrix run
+performed (user runs on server).
+
+#### New files
+
+| File | Purpose |
+|---|---|
+| `control/enhanced_predictive.py` | `@register("enhanced_predictive")` — feedforward predictor; extrapolates inputs, reuses `required_decel()` |
+| `control/enhanced_inflation.py` | `@register("enhanced_inflation")` — threshold inflation (`v_close·L`); worst-case robust |
+| `tests/test_latency_comp.py` | Unit tests (mock `carla`): L=0 reduction, L-monotonicity, mismatched, matrix-mode counts |
+| `CHANGES_latency_compensation.md` | Change summary for this feature |
+
+#### Modified files
+
+| File | Change | Lines added/changed |
+|---|---|---|
+| `control/base_controller.py` | `make_controller(name, cfg, run_spec=None)` attaches `ctrl.run_spec`; add `compensation_latency()` helper | +~25 |
+| `core/runner.py` | Import 2 controllers; pass `run_spec=spec` to `make_controller`; record `comp_source`/`comp_L_frames` | +~7 |
+| `core/runner_lead_brake.py` | Same as runner.py + 2 fields on `LeadBrakeRecord` | +~9 |
+| `core/metrics.py` | Add `comp_source`, `comp_L_frames` to `RunRecord` (defaults `""`/`0`) | +2 |
+| `config/scenario_cutin.py` | `COMP_*` constants + `latency_comp`/`latency_mismatch` in `build_matrix_runs` | +~30 |
+| `config/scenario_lead_brake.py` | Same additions as cutin config | +~30 |
+| `README.md` | Controllers table + 2 Test Modes + CSV columns | +~25 |
+| `TECHNICAL_DOC.md` | §5 latency-comp subsection, §7 CSV columns, §12 this entry | +~70 |
+
+**Design notes.** `enhanced_predictive` extrapolates the *inputs* to `required_decel()`
+(so `L=0` reduces to `proposed_enhanced` exactly, verified per-tick). Closing acceleration is
+`+lead_decel` (lead braking → gap closes faster). `L` is delivered through the run spec only —
+controllers never read `PerceptionDegrader` state (loose coupling).
+
+**Controller files not touched:** `baseline_static_ttc.py`, `proposed_dynamic_ttc.py`,
+`proposed_enhanced.py` — verified with `git diff` (empty). Existing CSV columns unchanged;
+`TEST_MODE=original/latency/noise` produce identical results (their run specs carry no
+`comp_*` keys).
+
+#### How to verify the L=0 reduction (no CARLA)
+
+```bash
+python3 tests/test_latency_comp.py   # 7 tests, incl. predictive@L=0 == proposed_enhanced per tick
+```
+
+---
+
+*This document was generated from: `CODE_CHANGES.md`, `REVIEW.md`, `docs/brake_timing_params.md`, `review_yolo_tablev.md`, `CHANGES_degradation.md`, and `CHANGES_latency_compensation.md`. Last updated: 2026-07-11.*

@@ -22,6 +22,8 @@ from perception.degrade import PerceptionDegrader
 import control.baseline_static_ttc   # noqa: F401
 import control.proposed_dynamic_ttc  # noqa: F401
 import control.proposed_enhanced     # noqa: F401
+import control.enhanced_predictive   # noqa: F401
+import control.enhanced_inflation    # noqa: F401
 
 
 def run_case(sess, cfg, case, controller_name, delay_frames, detector,
@@ -51,6 +53,10 @@ def run_case(sess, cfg, case, controller_name, delay_frames, detector,
     rec.dropout_mode   = spec.get("dropout_mode", "freeze")
     rec.test_mode      = test_mode
     rec.seed           = _seed
+    # พารามิเตอร์ชดเชย latency (comp controllers ใช้; controller อื่นไม่สนใจ)
+    rec.comp_source    = spec.get("comp_source", "")
+    rec.comp_L_frames  = spec.get("comp_L_frames",
+                                  delay_frames if spec.get("comp_source") == "oracle" else 0)
 
     try:
         # ── EGO ──
@@ -98,7 +104,8 @@ def run_case(sess, cfg, case, controller_name, delay_frames, detector,
                 pass
 
         # ── เตรียมสมองกล + ฉาก ──
-        controller = make_controller(controller_name, cfg)
+        # ส่ง run_spec เข้า controller (comp controllers อ่านค่า L จากนี้; ตัวอื่นไม่แตะ)
+        controller = make_controller(controller_name, cfg, run_spec=spec)
         controller.reset()
         degrader = PerceptionDegrader(
             delay_frames=delay_frames,

@@ -45,6 +45,24 @@ class BaseController:
         return self.control(brake=b) if b > 0.0 else self.control(throttle=0.6)
 
 
+# ── ตัวช่วยชดเชย latency (ใช้ร่วมโดย enhanced_predictive / enhanced_inflation) ──
+def compensation_latency(run_spec, cfg):
+    """แปลง run_spec → (L วินาที, L เฟรมที่ใช้จริง, comp_source)
+
+    controller ที่ชดเชย latency เรียกฟังก์ชันนี้เพื่อรู้ว่าจะพยากรณ์ไปข้างหน้ากี่วินาที
+      comp_source='oracle'      → ชดเชยด้วย L = delay_frames จริงที่ฉีด (upper bound: รู้ L เป๊ะ)
+      comp_source='mismatched'  → ชดเชยด้วย comp_L_frames ที่กำหนดแยกจาก delay_frames (ทดสอบความเปราะ)
+    run_spec ว่าง/ไม่มี key → default oracle + delay_frames=0 → L=0 → ลดรูปเป็นพฤติกรรมไม่ชดเชย
+    ไม่ผูกกับ PerceptionDegrader โดยตรง — รับค่าผ่าน run_spec เท่านั้น (loose coupling)
+    """
+    spec = run_spec or {}
+    delay = spec.get("delay_frames", 0)
+    src = spec.get("comp_source", "oracle")
+    frames = spec.get("comp_L_frames", delay) if src == "mismatched" else delay
+    dt = getattr(cfg, "FIXED_DT", 0.05)
+    return max(0.0, frames * dt), frames, src
+
+
 # ── registry: map ชื่อ → คลาส (run scripts เรียกผ่านนี้) ───────────
 _REGISTRY = {}
 
@@ -57,7 +75,11 @@ def register(name):
     return deco
 
 
-def make_controller(name, cfg):
+def make_controller(name, cfg, run_spec=None):
     if name not in _REGISTRY:
         raise KeyError(f"ไม่รู้จัก controller '{name}' (มี: {list(_REGISTRY)})")
-    return _REGISTRY[name](cfg)
+    ctrl = _REGISTRY[name](cfg)
+    # ผูก run_spec ไว้ให้ controller ที่ต้องการใช้ (เช่น ชดเชย latency) อ่านได้ —
+    # controller เดิมไม่แตะ attribute นี้ พฤติกรรมจึงไม่เปลี่ยน
+    ctrl.run_spec = run_spec or {}
+    return ctrl
