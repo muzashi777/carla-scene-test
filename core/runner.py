@@ -16,8 +16,9 @@ from core.scenario_cutin import CutInScenario
 from core.types import Perception, EgoState
 from core.metrics import RunRecord, MfddTracker
 from core.conflict import cutin_is_conflict
-from control.base_controller import make_controller
+from control.base_controller import make_controller, compensation_latency
 from perception.degrade import PerceptionDegrader
+from perception.predict import PerceptionPredictor
 # import เพื่อให้ register() ทำงาน (ขึ้นทะเบียนชื่อ controller)
 import control.baseline_static_ttc   # noqa: F401
 import control.proposed_dynamic_ttc  # noqa: F401
@@ -116,6 +117,14 @@ def run_case(sess, cfg, case, controller_name, delay_frames, detector,
             seed=_seed,
         )
         degrader.reset()
+        # ── predictive-oracle compensation layer (TEST_MODE=latency_comp_all เท่านั้น) ──
+        # วาง predictor ไว้ "หน้า" base controller: degrade ทำให้ perception ล้าสมัย,
+        # predict พยากรณ์กลับให้สด (สมมาตรกัน). โหมดอื่นไม่มี key 'predict' → predictor=None (no-op)
+        predictor = None
+        if spec.get("predict"):
+            L_sec, _cf, _cs = compensation_latency(spec, cfg)
+            predictor = PerceptionPredictor(l_seconds=L_sec)
+            predictor.reset()
         scen = CutInScenario(ego, dart, cfg, case)
         scen.start()
         ego_ms = actors.kmh_to_ms(case["ego_speed_kmh"])
@@ -230,6 +239,9 @@ def run_case(sess, cfg, case, controller_name, delay_frames, detector,
             ego_state = EgoState(speed_ms=actors.speed_ms(ego),
                                  speed_kmh=v_kmh, mu=case["mu"])
             perc, ego_state = degrader.apply(perc, ego_state)
+            # ชดเชย latency ด้วย predictor layer (ถ้าเปิด) — พยากรณ์ perception ไปข้างหน้า L วินาที
+            if predictor is not None:
+                perc, ego_state = predictor.apply(perc, ego_state)
 
             # ── สมองกลตัดสินใจ ──
             ctrl = controller.decide(perc, ego_state)

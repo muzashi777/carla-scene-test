@@ -147,6 +147,10 @@ def build_matrix_runs(mode="original"):
                                 (upper bound: รู้ L เป๊ะ กู้ Rc ได้แค่ไหน)
     TEST_MODE=latency_mismatch— enhanced_predictive × delay คงที่ × comp_L_frames กวาด
                                 (ความเปราะเมื่อประมาณ L ผิด: under/exact/over-compensate)
+    TEST_MODE=latency_comp_all— CONTROLLERS (base ทุกตัว) × delay sweep × predictive-oracle
+                                layer (predict=True). วาง predictor ไว้หน้า base controller ทุกตัว
+                                (สมมาตรกับ degradation layer) → เทียบว่า predictor กู้ Rc ของ
+                                แต่ละ base controller ได้แค่ไหนที่ latency เดียวกัน (upper bound: รู้ L เป๊ะ)
     """
     if mode == "latency":
         return [
@@ -176,6 +180,17 @@ def build_matrix_runs(mode="original"):
                  delay_frames=d, comp_source="mismatched", comp_L_frames=cl,
                  noise_sigma_m=0.0, noise_sigma_vr=0.0, dropout_p=0.0, dropout_mode="freeze")
             for cl in COMP_MISMATCH_L_FRAMES
+        ]
+    if mode == "latency_comp_all":
+        # predictive-oracle compensation applied as a LAYER in front of every base
+        # controller (predict=True → runner inserts PerceptionPredictor; see perception/predict.py).
+        # oracle: ชดเชยด้วย L = delay จริงที่ฉีด (comp_L_frames = delay_frames). ใช้ CONTROLLERS
+        # (base ทุกตัว) ตัวเดียวกันกับโหมด original/latency เพื่อความยุติธรรม (controller-swap protocol)
+        return [
+            dict(label=f"{c}_pred_d{d}f", controller=c, delay_frames=d,
+                 comp_source="oracle", comp_L_frames=d, predict=True,
+                 noise_sigma_m=0.0, noise_sigma_vr=0.0, dropout_p=0.0, dropout_mode="freeze")
+            for c in CONTROLLERS for d in LATENCY_DELAY_FRAMES
         ]
     # "original" (default) — identical to prior hardcoded MATRIX_RUNS
     return [

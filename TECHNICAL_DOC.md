@@ -306,6 +306,49 @@ bound** on Rc recovery. Two `comp_source` values drive the two research question
 > delay-mismatch). True online `L` estimation belongs to perception-in-the-loop testing; MPC
 > and timestamp-jitter variants are likewise deferred.
 
+### Predictive compensation as a *layer* — `TEST_MODE=latency_comp_all`
+
+`enhanced_predictive` bakes the predictor *inside* a required-decel controller. The
+`latency_comp_all` experiment instead makes prediction a **preprocessing layer**
+(`perception/predict.py`, `PerceptionPredictor`) that can sit in front of *any* base
+controller — the exact mirror of the degradation layer:
+
+```
+raw Perception → degrade (delay by L → stale) → predict (extrapolate +L → fresh) → controller
+```
+
+`PerceptionPredictor.apply(perc, ego)` rewrites the Perception fields using the same
+constant-acceleration model as `enhanced_predictive` (closing acceleration `+lead_decel`):
+
+```
+lead_speed' = max(0, lead_speed − lead_decel·L)
+distance'   = max(0, distance − v_close·L − 0.5·lead_decel·L²)   # v_close = rel_speed
+rel_speed'  = v_close + lead_decel·L ;  ttc' = distance'/rel_speed'
+lead_decel' = lead_decel (unchanged) ;  detected / box_h passed through
+```
+
+- **L = 0 identity.** `apply()` returns a copy with every field unchanged, so
+  `compensated_X(L=0)` equals base controller `X` per tick for **every** controller.
+- **enhanced_predictive consistency.** `proposed_enhanced` reads only
+  `distance` / `lead_speed` / `lead_decel` / `detected`, and `distance'`/`lead_speed'`
+  are exactly the inputs `enhanced_predictive` feeds to `required_decel()`. Hence
+  *`PerceptionPredictor` + `proposed_enhanced` reproduces `enhanced_predictive` per tick*
+  (proven for L ∈ {0,4,8,16}, both scenarios, in `tests/test_latency_comp_all.py`). The two
+  predict at different points (Perception fields vs required-decel inputs) but are
+  mathematically identical for the required-decel controller; `rel_speed'`/`ttc'` extend
+  the same model to the TTC controllers (`baseline` / `proposed`).
+- **Fairness.** All base controllers receive the *same* predicted Perception at the same
+  latency (controller-swap protocol), so Rc differences are attributable to the controller.
+- **Predictive only.** Inflation is distance-based and does not fit the time-based
+  TTC controllers, so `latency_comp_all` sweeps the predictor only (oracle L).
+
+The layer is engaged solely when a run spec carries `predict=True` (set only by
+`build_matrix_runs("latency_comp_all")`); every other mode leaves `predictor=None`, so
+`original` / `latency` / `noise` / `latency_comp` / `latency_mismatch` are unchanged. Rows
+are recorded with `comp_source="oracle"`, `comp_L_frames == delay_frames`, and
+`test_mode="latency_comp_all"` (no new CSV column — the base `controller` + `test_mode`
+distinguish these rows from `latency_comp`, which uses the comp controllers).
+
 ---
 
 ## 6. CPEIM Metrics and Aggregation Rules
@@ -909,4 +952,52 @@ python3 tests/test_latency_comp.py   # 7 tests, incl. predictive@L=0 == proposed
 
 ---
 
-*This document was generated from: `CODE_CHANGES.md`, `REVIEW.md`, `docs/brake_timing_params.md`, `review_yolo_tablev.md`, `CHANGES_degradation.md`, and `CHANGES_latency_compensation.md`. Last updated: 2026-07-11.*
+### Predictive-Oracle Compensation Across All Base Controllers — July 2026
+
+**Purpose:** Add `TEST_MODE=latency_comp_all` — apply predictive-oracle compensation
+(exact latency `L` known) as a preprocessing *layer* in front of **every** base controller,
+then sweep latency, so controllers can be compared at the same latency. No controller
+decision logic changed; no CARLA/matrix run performed (user runs on server). See §5.
+
+#### New files
+
+| File | Purpose |
+|---|---|
+| `perception/predict.py` | `PerceptionPredictor` — feedforward predictor layer; extrapolates the Perception fields forward by `L` (mirror of `PerceptionDegrader`). L=0 → strict identity. |
+| `tests/test_latency_comp_all.py` | Unit tests (mock `carla`): L=0 identity per controller; predictor-layer + `proposed_enhanced` == `enhanced_predictive` per tick (L ∈ {0,4,8,16}, both scenarios); gap/ttc monotonicity in L; run-count check; old modes unchanged. |
+| `CHANGES_latency_comp_all.md` | Change summary for this feature. |
+
+#### Modified files
+
+| File | Change | Reason |
+|---|---|---|
+| `config/scenario_cutin.py` | `+15` — `latency_comp_all` branch in `build_matrix_runs` (+ docstring) | Build the run set `CONTROLLERS × LATENCY_DELAY_FRAMES`, all `comp_source="oracle"`, `comp_L_frames=delay_frames`, `predict=True`. |
+| `config/scenario_lead_brake.py` | `+15` — same as cutin config | Same branch for the lead-brake matrix. |
+| `core/runner.py` | `+14/−1` — import `PerceptionPredictor` + `compensation_latency`; build `predictor` when `spec["predict"]`; apply it after the degrader | Insert the prediction layer between degrader and controller for `latency_comp_all` only (no key → no-op elsewhere). |
+| `core/runner_lead_brake.py` | `+14/−1` — same as runner.py | Same wiring for the lead-brake runner. |
+| `run_matrix.py` | `+4/−1` — embed `test_mode` in the CSV filename | `matrix_<TEST_MODE>_<stamp>.csv`; consistent, self-describing filenames. |
+| `run_matrix_lead.py` | `+4/−1` — same as run_matrix.py | `lead_matrix_<TEST_MODE>_<stamp>.csv`. |
+| `README.md` | Test Modes table + run commands + filename note | Document the new mode and the filename convention. |
+| `TECHNICAL_DOC.md` | §5 predictive-layer subsection + §12 this entry | Describe the layer, the L=0 / consistency guarantees, and the revision. |
+
+**Design notes.** Prediction is now a **layer** symmetric with degradation (`degrade` makes
+input stale, `predict` makes it fresh) rather than controller-internal logic. It uses the
+same constant-acceleration model as `enhanced_predictive`; because `proposed_enhanced` reads
+only the fields the predictor rewrites, `layer + proposed_enhanced` reproduces
+`enhanced_predictive` per tick (verified — no math difference to escalate). The layer is
+gated on `spec["predict"]`, set only by `latency_comp_all`, so all prior modes are byte-for-byte
+unchanged. No CSV columns renamed/removed (uses existing `comp_source`/`comp_L_frames`/`test_mode`).
+
+**Controller files not touched:** `baseline_static_ttc.py`, `proposed_dynamic_ttc.py`,
+`proposed_enhanced.py`, `enhanced_predictive.py`, `enhanced_inflation.py` — verified with
+`git diff` (empty). MFDD, kinematic brake cap, `FIXED_DT`, and scene logic unchanged.
+
+#### How to verify (no CARLA)
+
+```bash
+python3 tests/test_latency_comp_all.py   # L=0 identity, enhanced_predictive consistency, run-count
+```
+
+---
+
+*This document was generated from: `CODE_CHANGES.md`, `REVIEW.md`, `docs/brake_timing_params.md`, `review_yolo_tablev.md`, `CHANGES_degradation.md`, `CHANGES_latency_compensation.md`, and `CHANGES_latency_comp_all.md`. Last updated: 2026-07-11.*

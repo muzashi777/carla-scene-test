@@ -96,7 +96,7 @@ python -m core.report results/lead_matrix_*.csv
 
 ## Test Modes
 
-A `TEST_MODE` environment variable selects the degradation sweep. The degradation layer (`perception/degrade.py`) sits between the perception pipeline and every controller — all three controllers receive the same degraded input per run, preserving fairness.
+A `TEST_MODE` environment variable selects the degradation sweep. The degradation layer (`perception/degrade.py`) sits between the perception pipeline and every controller — all three controllers receive the same degraded input per run, preserving fairness. Its mirror image, the **prediction layer** (`perception/predict.py`), sits in the same slot for `latency_comp_all`: *degrade* makes the perception input stale (delays it by `L`), *predict* extrapolates it forward by `L` to make it fresh again — so any base controller can be run "with predictive-oracle compensation" without changing its decision logic.
 
 | `TEST_MODE` | What it does | Runs (cut-in) |
 |---|---|---|
@@ -105,6 +105,7 @@ A `TEST_MODE` environment variable selects the degradation sweep. The degradatio
 | `noise` | Sweep `noise_sigma_m` ∈ {0.0, 0.5, 1.0, 2.0} m × 3 controllers | 12 |
 | `latency_comp` | Sweep `delay_frames` × `COMP_CONTROLLERS` with `comp_source=oracle` (L known exactly). Measures how much of the latency-induced Rc loss each compensator recovers — an **upper bound**. | 16 |
 | `latency_mismatch` | `enhanced_predictive` at a fixed injected delay (`COMP_MISMATCH_DELAY=8`) while sweeping the *compensated* `comp_L_frames` ∈ {4, 8, 12, 16} (under-/exact-/over-compensate). Measures **fragility** to mis-estimating L. | 4 |
+| `latency_comp_all` | Apply the predictive-oracle **layer** (`perception/predict.py`, `comp_source=oracle`, L = `delay_frames` exactly) in front of **every base controller** (`CONTROLLERS`), sweeping `delay_frames` ∈ {0, 4, 8, 16}. All base controllers get the *same* predicted Perception at the same latency, so you can compare across controllers: how much of each controller's Rc does the predictor recover, and does the best compensated controller beat the best uncompensated one? | 12 |
 
 **Run on server:**
 ```bash
@@ -127,7 +128,17 @@ TEST_MODE=latency_comp LEAD_DECEL=6.0 python run_matrix_lead.py
 # Latency compensation — fragility to mis-estimated L
 TEST_MODE=latency_mismatch python run_matrix.py
 TEST_MODE=latency_mismatch LEAD_DECEL=6.0 python run_matrix_lead.py
+
+# Predictive-oracle compensation across ALL base controllers
+TEST_MODE=latency_comp_all python run_matrix.py
+TEST_MODE=latency_comp_all LEAD_DECEL=6.0 python run_matrix_lead.py
 ```
+
+> **Output filenames embed `TEST_MODE`.** Every mode now writes to
+> `results/matrix_<TEST_MODE>_<YYYYMMDD_HHMMSS>.csv` (cut-in) and
+> `results/lead_matrix_<TEST_MODE>_<YYYYMMDD_HHMMSS>.csv` (lead-brake), e.g.
+> `matrix_latency_comp_all_20260711_101500.csv`, so each result file states what it tested.
+> The timestamp keeps every run unique; existing result files are never overwritten.
 
 Sweep constants (`LATENCY_DELAY_FRAMES`, `NOISE_SIGMA_M_SWEEP`, `COMP_CONTROLLERS`, `COMP_MISMATCH_DELAY`, `COMP_MISMATCH_L_FRAMES`, etc.) are defined at the top of each config file and can be freely adjusted.
 

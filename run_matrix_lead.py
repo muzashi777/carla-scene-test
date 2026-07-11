@@ -62,7 +62,9 @@ def main():
     # ── เขียน CSV ──
     stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     prefix = getattr(cfg, "RESULTS_PREFIX", "lead_matrix")
-    csv_path = os.path.join(cfg.RESULTS_DIR, f"{prefix}_{stamp}.csv")
+    # embed TEST_MODE in the filename so each result file states what it tested
+    # (e.g. lead_matrix_original_*.csv, lead_matrix_latency_comp_all_*.csv); timestamp keeps it unique
+    csv_path = os.path.join(cfg.RESULTS_DIR, f"{prefix}_{test_mode}_{stamp}.csv")
     write_csv(records, csv_path)
     print(f"\n[CSV] เขียนผลที่ {csv_path}")
 
