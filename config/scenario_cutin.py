@@ -1,120 +1,121 @@
 # -*- coding: utf-8 -*-
 """
-ไฟล์ตั้งค่ากลางของฉาก cut-in / dart-out (รถพุ่งออกด้านข้างมาจอดขวางเลน)
+Central configuration file for the cut-in / dart-out scenario
+(a vehicle cuts in from the side and blocks the lane)
 ----------------------------------------------------------------------
-แก้ค่าทุกอย่างที่นี่ที่เดียว แล้วทั้ง run_single.py และ run_matrix.py จะใช้ตาม
-ค่าฉาก/transform ดึงมาจากต้นแบบ test_spawn_scene03_step3-2.py ที่จูนแล้ว
+Edit all values here only; both run_single.py and run_matrix.py will follow.
+Scene/transform values are taken from the tuned prototype test_spawn_scene03_step3-2.py
 """
 import os
 
-# ── การเชื่อมต่อ CARLA ─────────────────────────────────────────────
+# ── CARLA Connection ─────────────────────────────────────────────
 HOST = "localhost"
 PORT = 2000
 TIMEOUT = 10.0
 
-# ── พารามิเตอร์ซิม ─────────────────────────────────────────────────
+# ── Simulation Parameters ─────────────────────────────────────────────────
 FIXED_DT  = 0.05          # 20 FPS (sync mode)
 MAX_TICKS = 400
 LOG_EVERY = 10
-SETTLE_TICKS = 20         # tick เปล่าให้ฉากนิ่งก่อนปล่อยรถ
-STOP_KMH  = 0.6           # ต่ำกว่านี้ถือว่าหยุดสนิท
-END_Y     = -56.0         # ego เลยจุดนี้ = ผ่านจุดตัดไปแล้ว (ไม่ได้เบรก)
+SETTLE_TICKS = 20         # empty ticks to let the scene settle before releasing vehicles
+STOP_KMH  = 0.6           # below this speed the vehicle is considered fully stopped
+END_Y     = -56.0         # ego past this point = passed the intersection without braking
 GRAVITY   = 9.81
 
-# ── ตำแหน่งรถ (พิกัดโลก จากต้นแบบ scene03) ─────────────────────────
-EGO_SPAWN  = dict(x=3.02, y=-8.70, z=1.15, yaw=-90)            # ego เริ่มที่นี่ วิ่งไปทาง -Y
-DART_SPAWN = dict(x=11.0, y=-51.5, z=0.8,  yaw=180,            # รถพุ่งออก เริ่มจอดด้านข้าง
+# ── Vehicle Positions (world coordinates, from scene03 prototype) ─────────────────────────
+EGO_SPAWN  = dict(x=3.02, y=-8.70, z=1.15, yaw=-90)            # ego starts here, driving in the -Y direction
+DART_SPAWN = dict(x=11.0, y=-51.5, z=0.8,  yaw=180,            # dart vehicle starts parked at the side
                   model="vehicle.ue4.audi.tt")
-DART_STOP_X = 3.5         # dart พุ่งมาถึง x นี้ (กลางเลน ego) แล้วเบรกจอดขวาง
+DART_STOP_X = 3.5         # dart reaches this x (centre of ego's lane) then brakes to a blocking stop
 
-# ── กล้อง ───────────────────────────────────────────────────────────
+# ── Cameras ───────────────────────────────────────────────────────────
 CAM_W, CAM_H = 1280, 720
-CAM_FRONT_TF = dict(x=3.5, y=0.2, z=1.60, pitch=8)             # กล้องหน้าติด ego (ใช้กับ YOLO)
-CAM_TOP_TF   = dict(x=-2.0, y=-6.0, z=3.5, pitch=-15, yaw=45)  # กล้อง top view (โชว์เฉยๆ)
-# พารามิเตอร์ pinhole เผื่ออนาคต (ตอนนี้ระยะใช้ ground-truth ไม่ได้ใช้ค่านี้)
+CAM_FRONT_TF = dict(x=3.5, y=0.2, z=1.60, pitch=8)             # front camera mounted on ego (used with YOLO)
+CAM_TOP_TF   = dict(x=-2.0, y=-6.0, z=3.5, pitch=-15, yaw=45)  # top-view camera (display only)
+# Pinhole parameter reserved for future use (currently distance uses ground-truth, this value is unused)
 CAM_FOV_DEG = 90.0
 
-# ── YOLO (ตัวตรวจจับว่ามีรถในเลนไหม) ───────────────────────────────
+# ── YOLO (detector for vehicles in the lane) ───────────────────────────────
 YOLO_MODEL  = "yolov8n.pt"
-YOLO_DEVICE = "cpu"       # "cpu" หรือ "cuda"
+YOLO_DEVICE = "cpu"       # "cpu" or "cuda"
 CONF_THRESH = 0.45
 IOU_THRESH  = 0.45
 TARGET_CLASSES = [0, 1, 2, 3, 5, 7, 9, 11]
-VEHICLE_CLS = (2, 3, 5, 7)        # car, moto, bus, truck → ใช้ตัดสินว่าเป็น "รถ"
+VEHICLE_CLS = (2, 3, 5, 7)        # car, moto, bus, truck → used to classify as a "vehicle"
 CLASS_COLORS = {0:(0,255,0),1:(255,165,0),2:(0,0,255),3:(255,0,255),
                 5:(0,165,255),7:(128,0,128),9:(0,255,255),11:(255,255,0)}
 
-# แถบเลน ego เป็นพิกเซล (ไม่ใช่ lane detection) — เบรกเฉพาะกล่องที่ "จุดกลาง x" ตกในแถบนี้
+# Ego lane band in pixels (not lane detection) — only brake for boxes whose "centre x" falls in this band
 LANE_LEFT  = 520
 LANE_RIGHT = 760
-# กล่องต้องสูงอย่างน้อยเท่านี้ถึงนับว่า "ตรวจเจอใกล้พอ" (กันทริกตอน dart ยังไกล)
+# Box must be at least this tall to count as "detected close enough" (prevents triggering when dart is still far)
 MIN_BOX_H  = 90
 
-# ── แหล่งเกตตรวจจับ (ใช้ตัดสินว่า 'มีอันตรายในเส้นทาง' เพื่อให้สมองกลเบรก) ──
-#   "groundtruth" = ใช้ตำแหน่งจริงจาก CARLA ว่า dart อยู่ในเส้นทางข้างหน้าไหม (เชื่อถือได้)
-#   "yolo"        = ใช้แถบพิกเซลกลางภาพ + ความสูงกล่อง (เปราะกับเรขาคณิต cut-in)
-#   "both_or"     = จริงเมื่อ ground-truth หรือ YOLO อย่างใดอย่างหนึ่งจริง
-# แนะนำ "groundtruth" เพราะ dart พุ่งเข้าจากด้านข้าง มักหลุดแถบกลางภาพจนชน
-# YOLO ยังถูกวาดบนจอเสมอเพื่อความสมจริง/ดีบัก ไม่ว่าเลือกอันไหน
+# ── Detection gate source (used to decide "hazard in path" so the controller brakes) ──
+#   "groundtruth" = use true CARLA position to check whether dart is in the forward path (reliable)
+#   "yolo"        = use the centre pixel band + box height (fragile with cut-in geometry)
+#   "both_or"     = true when either ground-truth or YOLO is true
+# "groundtruth" is recommended because dart cuts in from the side and often slips out of the centre band causing a collision
+# YOLO is still drawn on screen at all times for realism/debugging, regardless of which source is selected
 DETECTION_SOURCE = "groundtruth"
 
-# ทางเดิน (corridor) ของ ego สำหรับเกต ground-truth — วัดในกรอบพิกัด ego
-INPATH_HALF_WIDTH = 1.8    # ครึ่งความกว้างเลน (m) — |ระยะข้าง| ≤ ค่านี้ = อยู่ในเลน
-INPATH_MAX_RANGE  = 40.0   # มองไปข้างหน้าไกลสุด (m)
+# Ego corridor for the ground-truth gate — measured in ego's coordinate frame
+INPATH_HALF_WIDTH = 1.8    # half lane width (m) — |lateral offset| ≤ this = in lane
+INPATH_MAX_RANGE  = 40.0   # maximum forward look-ahead distance (m)
 
-# ── predictive corridor (เห็น dart ตั้งแต่ "กำลังเข้าเลน" ไม่รอจนเข้าเต็มตัว) ──
-# ใช้ความเร็วด้านข้างของ dart ทำนายว่าจะเข้า corridor ภายใน lookahead วินาทีไหม
-# ทำให้ทั้ง baseline/proposed มี detection lead พอ → dynamic TTC ของ proposed ได้ทำงาน
+# ── Predictive corridor (detects dart while it is "entering the lane", not waiting until fully in) ──
+# Uses dart's lateral speed to predict whether it will enter the corridor within lookahead seconds
+# Gives both baseline/proposed sufficient detection lead → dynamic TTC of proposed can take effect
 INPATH_PREDICT   = True
-INPATH_LOOKAHEAD = 1.5     # วินาที มองล่วงหน้าว่า dart จะเข้าเลนไหม
+INPATH_LOOKAHEAD = 1.5     # seconds look-ahead to predict whether dart will enter the lane
 
-# ── การจับคู่เฟรมกล้องกับ snapshot โลก (กันภาพดริฟต์ใน sync mode) ──
-FRAME_SYNC = True          # True = อ่านภาพจนกว่า frame id ตรงกับ world.tick()
+# ── Camera frame / world snapshot synchronisation (prevents image drift in sync mode) ──
+FRAME_SYNC = True          # True = read frames until frame id matches world.tick()
 
-# ── ระยะผิวถึงผิว (surface gap) ──
-# dist2d เป็นระยะจุดศูนย์กลาง รถยาวคันละ ~4.5 ม. การชนเกิดเมื่อกันชนแตะ
-# จึงหักขนาดตัวรถออกก่อนคำนวณ TTC/clearance ไม่งั้นสมองกลเบรกช้าไป ~2 ม.
-AUTO_GAP_OFFSET = True     # True = คำนวณจาก bounding box อัตโนมัติ (ego ยาว + dart กว้าง)
-GAP_OFFSET = 3.2           # ใช้ค่านี้เมื่อ AUTO_GAP_OFFSET=False (ม.)
+# ── Surface-to-surface gap ──
+# dist2d is the centre-to-centre distance; each vehicle is ~4.5 m long; collision occurs when bumpers touch
+# so subtract the vehicle dimensions before computing TTC/clearance; otherwise the controller brakes ~2 m too late
+AUTO_GAP_OFFSET = True     # True = computed automatically from bounding box (ego length + dart width)
+GAP_OFFSET = 3.2           # used when AUTO_GAP_OFFSET=False (m)
 
-# ── โมเดลการเบรก ──
-#   "kinematic" = คุมความหน่วง = brake × μ × g ตรงๆ ผ่าน set_target_velocity
-#                 → μ เป็นตัวแปรทดสอบจริง ทำซ้ำได้ ตรงสูตร v²/2μg (แนะนำ)
-#   "physics"   = ส่ง apply_control(brake) ให้ tire model ของ CARLA จัดการ
-#                 (ใช้ได้ถ้า CARLA 0.9.x รับ tire_friction; 0.10/Chrono มักไม่รับ μ)
+# ── Braking model ──
+#   "kinematic" = controls deceleration = brake × μ × g directly via set_target_velocity
+#                 → μ is the actual test variable, reproducible, consistent with v²/2μg (recommended)
+#   "physics"   = sends apply_control(brake) and lets CARLA's tire model handle it
+#                 (works if CARLA 0.9.x accepts tire_friction; 0.10/Chrono often does not accept μ)
 BRAKE_MODEL = "kinematic"
 
-# ── ความลื่นถนน μ (ตั้งที่ tire_friction ของล้อ) ───────────────────
+# ── Road friction μ (set at wheel tire_friction) ───────────────────
 MU_DRY = 0.85
 MU_WET = 0.40
 
 # ══════════════════════════════════════════════════════════════════
-#  เคสเดี่ยว สำหรับ run_single.py (ดีบัก/พรีเซนต์ มีภาพ)
+#  Single case for run_single.py (debug/demo, with display)
 # ══════════════════════════════════════════════════════════════════
 SINGLE_CASE = dict(
-    ego_speed_kmh = 50.0,     # ความเร็วรถเรา (v_x)
-    mu            = MU_WET,    # ความลื่นถนน
-    trigger_d     = 20.0,     # dart พุ่งออกเมื่อ ego ห่าง dart = ระยะนี้ (Δd, เมตร)
-    dart_speed_kmh= 20.0,     # ความเร็ว dart ขณะพุ่งออก (v_ob)
+    ego_speed_kmh = 50.0,     # ego vehicle speed (v_x)
+    mu            = MU_WET,    # road friction coefficient
+    trigger_d     = 20.0,     # dart launches when ego-to-dart distance = this value (Δd, metres)
+    dart_speed_kmh= 20.0,     # dart speed when it launches (v_ob)
 )
 SINGLE_CONTROLLER  = "proposed"   # "baseline" | "proposed"
-SINGLE_DELAY_FRAMES = 0           # หน่วงการรับรู้ (เฟรม) 0=ทันที, 16≈0.8s
-SHOW_WINDOW = True                # โชว์หน้าต่าง OpenCV ไหม
+SINGLE_DELAY_FRAMES = 0           # perception delay (frames) 0=immediate, 16≈0.8s
+SHOW_WINDOW = True                # whether to show the OpenCV window
 
 # ══════════════════════════════════════════════════════════════════
-#  TEST MATRIX สำหรับ run_matrix.py (ไล่อัตโนมัติ ไม่มีภาพ)
-#  ฉาก cut-in = 5 speed × 2 μ × 5 Δd = 50 เคส/สมองกล
+#  TEST MATRIX for run_matrix.py (automated sweep, no display)
+#  cut-in scenario = 5 speed × 2 μ × 5 Δd = 50 cases/controller
 # ══════════════════════════════════════════════════════════════════
 MATRIX = dict(
-    ego_speed_kmh = [20.0, 30.0, 40.0, 50.0, 60.0],   # 20 km/h = ความเร็วต่ำในเมือง/พื้นที่จอดรถ
+    ego_speed_kmh = [20.0, 30.0, 40.0, 50.0, 60.0],   # 20 km/h = low urban/parking-area speed
     mu            = [MU_DRY, MU_WET],
-    trigger_d     = [20.0, 25.0, 30.0, 35.0, 40.0],   # 40 m = ระยะตอบสนองยาวขึ้น (ขยาย domain)
+    trigger_d     = [20.0, 25.0, 30.0, 35.0, 40.0],   # 40 m = longer response distance (expands domain)
     dart_speed_kmh= [20.0],
 )
-# จะรันสมองกลไหนมาเทียบกัน + หน่วงเฟรมของแต่ละตัว
-# (สลับได้ 2 ทาง: เปลี่ยน controller หรือเปลี่ยน delay)
-#   default เทียบ 3 สมองกล (baseline, proposed, proposed_enhanced) บนเคสชุดเดียวกัน
-#   proposed_enhanced (required-decel) ลดรูปเป็นเคสสิ่งกีดขวางนิ่งในฉาก cut-in (v_l=0 → a_req=v_e²/2gap)
+# Which controllers to compare + per-controller frame delay
+# (switchable in 2 ways: change controller or change delay)
+#   default compares 3 controllers (baseline, proposed, proposed_enhanced) on the same case set
+#   proposed_enhanced (required-decel) reduces to the stationary-obstacle case in cut-in (v_l=0 → a_req=v_e²/2gap)
 # ── Controllers registered for all test modes ──────────────────────────────────
 # Add new controllers here — build_matrix_runs() picks them up in all modes automatically.
 CONTROLLERS = ["baseline", "proposed", "proposed_enhanced"]
@@ -126,15 +127,15 @@ NOISE_SIGMA_VR_SWEEP = [0.0, 0.2, 0.5, 1.0]  # rel_speed / lead_speed noise sigm
 DROPOUT_P_SWEEP      = [0.0, 0.05, 0.1, 0.2] # dropout probability per tick
 
 # ── Latency-compensation experiment (latency_comp / latency_mismatch) ─────────
-#   comp controllers ชดเชย perception latency: enhanced_predictive (predictor) /
-#   enhanced_inflation (threshold inflation). proposed_enhanced = control (ไม่ชดเชย),
-#   proposed = crossover reference. ดู control/enhanced_*.py และ CHANGES_latency_compensation.md
+#   comp controllers compensate for perception latency: enhanced_predictive (predictor) /
+#   enhanced_inflation (threshold inflation). proposed_enhanced = control (no compensation),
+#   proposed = crossover reference. See control/enhanced_*.py and CHANGES_latency_compensation.md
 COMP_CONTROLLERS      = ["proposed_enhanced", "enhanced_predictive",
                          "enhanced_inflation", "proposed"]
-COMP_MISMATCH_CTRL    = "enhanced_predictive"  # ตัวที่กวาด mismatch (ไวต่อ delay-mismatch สุด)
-COMP_MISMATCH_DELAY   = 8                       # delay จริงที่ฉีดคงที่ (เฟรม) ในโหมด mismatch
-COMP_MISMATCH_L_FRAMES = [4, 8, 12, 16]         # L' ที่ใช้ชดเชย: under(4) / exact(8) / over(12,16)
-COMP_R_SAFE           = 0.0                      # ระยะเผื่อยืนหยุดของ enhanced_inflation (m)
+COMP_MISMATCH_CTRL    = "enhanced_predictive"  # controller swept for mismatch (most sensitive to delay-mismatch)
+COMP_MISMATCH_DELAY   = 8                       # fixed injected real delay (frames) in mismatch mode
+COMP_MISMATCH_L_FRAMES = [4, 8, 12, 16]         # L' values used to compensate: under(4) / exact(8) / over(12,16)
+COMP_R_SAFE           = 0.0                      # stopping margin for enhanced_inflation (m)
 
 
 def build_matrix_runs(mode="original"):
@@ -144,13 +145,13 @@ def build_matrix_runs(mode="original"):
     TEST_MODE=latency         — sweep delay_frames across LATENCY_DELAY_FRAMES × controllers
     TEST_MODE=noise           — sweep noise_sigma_m across NOISE_SIGMA_M_SWEEP × controllers
     TEST_MODE=latency_comp    — COMP_CONTROLLERS × delay sweep × comp_source=oracle
-                                (upper bound: รู้ L เป๊ะ กู้ Rc ได้แค่ไหน)
-    TEST_MODE=latency_mismatch— enhanced_predictive × delay คงที่ × comp_L_frames กวาด
-                                (ความเปราะเมื่อประมาณ L ผิด: under/exact/over-compensate)
-    TEST_MODE=latency_comp_all— CONTROLLERS (base ทุกตัว) × delay sweep × predictive-oracle
-                                layer (predict=True). วาง predictor ไว้หน้า base controller ทุกตัว
-                                (สมมาตรกับ degradation layer) → เทียบว่า predictor กู้ Rc ของ
-                                แต่ละ base controller ได้แค่ไหนที่ latency เดียวกัน (upper bound: รู้ L เป๊ะ)
+                                (upper bound: knowing L exactly — how much Rc can be recovered)
+    TEST_MODE=latency_mismatch— enhanced_predictive × fixed delay × comp_L_frames swept
+                                (fragility when L is estimated incorrectly: under/exact/over-compensate)
+    TEST_MODE=latency_comp_all— CONTROLLERS (all base controllers) × delay sweep × predictive-oracle
+                                layer (predict=True). Places the predictor in front of every base controller
+                                (symmetric with the degradation layer) → compares how much Rc the predictor recovers for
+                                each base controller at the same latency (upper bound: knowing L exactly)
     """
     if mode == "latency":
         return [
@@ -165,7 +166,7 @@ def build_matrix_runs(mode="original"):
             for c in CONTROLLERS for sigma_m in NOISE_SIGMA_M_SWEEP
         ]
     if mode == "latency_comp":
-        # oracle: ชดเชยด้วย L = delay จริงที่ฉีด (comp_L_frames = delay_frames)
+        # oracle: compensate with L = actual injected delay (comp_L_frames = delay_frames)
         return [
             dict(label=f"{c}_d{d}f", controller=c, delay_frames=d,
                  comp_source="oracle", comp_L_frames=d,
@@ -173,7 +174,7 @@ def build_matrix_runs(mode="original"):
             for c in COMP_CONTROLLERS for d in LATENCY_DELAY_FRAMES
         ]
     if mode == "latency_mismatch":
-        # mismatched: delay จริงคงที่ แต่ชดเชยด้วย L' ที่ต่างออกไป (under/exact/over)
+        # mismatched: fixed real delay but compensate with a different L' (under/exact/over)
         d = COMP_MISMATCH_DELAY
         return [
             dict(label=f"{COMP_MISMATCH_CTRL}_d{d}f_L{cl}f", controller=COMP_MISMATCH_CTRL,
@@ -184,8 +185,8 @@ def build_matrix_runs(mode="original"):
     if mode == "latency_comp_all":
         # predictive-oracle compensation applied as a LAYER in front of every base
         # controller (predict=True → runner inserts PerceptionPredictor; see perception/predict.py).
-        # oracle: ชดเชยด้วย L = delay จริงที่ฉีด (comp_L_frames = delay_frames). ใช้ CONTROLLERS
-        # (base ทุกตัว) ตัวเดียวกันกับโหมด original/latency เพื่อความยุติธรรม (controller-swap protocol)
+        # oracle: compensate with L = actual injected delay (comp_L_frames = delay_frames). Uses CONTROLLERS
+        # (all base) same as original/latency mode for fairness (controller-swap protocol)
         return [
             dict(label=f"{c}_pred_d{d}f", controller=c, delay_frames=d,
                  comp_source="oracle", comp_L_frames=d, predict=True,
@@ -204,22 +205,22 @@ MATRIX_RUNS = build_matrix_runs(os.environ.get("TEST_MODE", "original"))
 RESULTS_DIR = "results"
 
 # ══════════════════════════════════════════════════════════════════
-#  พารามิเตอร์สมองกล (ปรับจูนได้)
+#  Controller parameters (tunable)
 # ══════════════════════════════════════════════════════════════════
-# baseline: TTC คงที่ (อ้างอิงระบบเบรกฉุกเฉินสากลในเปเปอร์)
-TTC_WARN_FULL = 1.6       # TTC ≤ ค่านี้ → เบรกบางส่วน
-TTC_BRAKE_FULL = 0.6      # TTC ≤ ค่านี้ → เบรกเต็ม
+# baseline: fixed TTC (reference: international AEB standard in paper)
+TTC_WARN_FULL = 1.6       # TTC ≤ this value → partial brake
+TTC_BRAKE_FULL = 0.6      # TTC ≤ this value → full brake
 
-# proposed: TTC ปรับตามความเร็ว + ความลื่น (เบรกล่วงหน้าขึ้นเมื่อเร็ว/ลื่น)
+# proposed: TTC adjusted for speed + friction (brakes earlier when faster/more slippery)
 #   thr_full = TTC_BRAKE_FULL + k_speed*max(0,(v-v0)/100) + k_mu*max(0,(mu0-mu))
-DYN_V0      = 40.0        # ความเร็วฐาน (km/h) เกินจากนี้เริ่มเพิ่ม threshold
-DYN_MU0     = 0.85        # μ ฐาน (แห้ง) ต่ำกว่านี้เริ่มเพิ่ม threshold
-DYN_K_SPEED = 1.2         # น้ำหนักผลของความเร็ว
-DYN_K_MU    = 1.5         # น้ำหนักผลของความลื่น
-PARTIAL_BRAKE = 0.4       # แรงเบรกช่วง partial
+DYN_V0      = 40.0        # base speed (km/h); above this threshold starts increasing
+DYN_MU0     = 0.85        # base μ (dry); below this threshold starts increasing
+DYN_K_SPEED = 1.2         # speed effect weight
+DYN_K_MU    = 1.5         # friction effect weight
+PARTIAL_BRAKE = 0.4       # partial-braking force
 
-# proposed_enhanced: required-deceleration (รู้ทั้ง μ และการเบรกของรถข้างหน้า)
-#   ฉาก cut-in: dart จอดขวาง v_l=0 → a_req = v_e²/2gap (เคสสิ่งกีดขวางนิ่ง) อัตโนมัติ
-#   เพิ่ม controller="proposed_enhanced" ใน MATRIX_RUNS ได้เพื่อเทียบ
-REQ_FULL_FRAC = 0.9       # urgency ≥ ค่านี้ → เบรกเต็ม (90% ของเพดาน μ·g)
-REQ_WARN_FRAC = 0.6       # urgency ≥ ค่านี้ → เบรกบางส่วน (PARTIAL_BRAKE)
+# proposed_enhanced: required-deceleration (knows both μ and the lead vehicle's braking)
+#   cut-in scenario: dart blocks the lane v_l=0 → a_req = v_e²/2gap (stationary-obstacle case) automatically
+#   add controller="proposed_enhanced" to MATRIX_RUNS to include in comparison
+REQ_FULL_FRAC = 0.9       # urgency ≥ this value → full brake (90% of μ·g ceiling)
+REQ_WARN_FRAC = 0.6       # urgency ≥ this value → partial brake (PARTIAL_BRAKE)

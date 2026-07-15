@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 """
-ไล่ TEST MATRIX ทั้งหมดของฉาก lead-brake (headless ไม่มีภาพ) สำหรับแต่ละสมองกลใน MATRIX_RUNS
-แล้วเขียน CSV (results/lead_matrix_*.csv) + สรุป R_c เทียบกัน → เช็กเป้า +20% (成果2)
-แยกขาดจากฉาก cut-in (run_matrix.py) เพื่อง่ายต่อการทดสอบ/ดีบักทีละฉาก
-วิธีใช้:  python run_matrix_lead.py
+Iterate through all TEST MATRIX cases for the lead-brake scenario (headless, no display) for each controller in MATRIX_RUNS
+then write CSV (results/lead_matrix_*.csv) + summarize R_c comparison → check +20% target (Achievement 2)
+Separated from the cut-in scenario (run_matrix.py) for easier per-scenario testing/debugging
+Usage:  python run_matrix_lead.py
 """
 import sys, os, itertools, datetime
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -16,10 +16,10 @@ from perception.yolo_detector import YoloDetector
 
 
 def build_cases():
-    """สร้างรายการเคสจาก MATRIX
-    ระยะห่าง: USE_THW=True → ไล่ headway_thw (วินาที) / USE_THW=False → ไล่ headway_d (เมตร, โหมดเดิม)
-    ความเร็ว: LEAD_SAME_AS_EGO=True → รถนำเร็วเท่า ego / False → lead_speed_kmh เป็นตัวแปรแยก
-    runner จะแปลง THW→เมตรจริง เอง (อิงความเร็ว ego)
+    """Build case list from MATRIX
+    Gap: USE_THW=True → iterate headway_thw (seconds) / USE_THW=False → iterate headway_d (meters, legacy mode)
+    Speed: LEAD_SAME_AS_EGO=True → lead vehicle same speed as ego / False → lead_speed_kmh is a separate variable
+    runner will convert THW→actual meters automatically (based on ego speed)
     """
     same = getattr(cfg, "LEAD_SAME_AS_EGO", True)
     use_thw = getattr(cfg, "USE_THW", False)
@@ -45,33 +45,33 @@ def main():
         cfg.TARGET_CLASSES, cfg.VEHICLE_CLS, cfg.LANE_LEFT, cfg.LANE_RIGHT, cfg.MIN_BOX_H,
     )
     cases = build_cases()
-    print(f"[MATRIX/lead-brake] {len(cases)} เคส/สมองกล × {len(matrix_runs)} runs "
-          f"= {len(cases)*len(matrix_runs)} รัน  TEST_MODE={test_mode}")
+    print(f"[MATRIX/lead-brake] {len(cases)} cases/controller × {len(matrix_runs)} runs "
+          f"= {len(cases)*len(matrix_runs)} runs  TEST_MODE={test_mode}")
 
     records = []
     with CarlaSession(cfg.HOST, cfg.PORT, cfg.TIMEOUT, cfg.FIXED_DT) as sess:
         for run in matrix_runs:
             for i, case in enumerate(cases):
-                print(f"\n--- [{run['label']}] เคส {i+1}/{len(cases)} {case} ---")
+                print(f"\n--- [{run['label']}] case {i+1}/{len(cases)} {case} ---")
                 rec, _ = run_case(sess, cfg, case, run["controller"],
                                   run.get("delay_frames", 0), detector,
                                   run_spec=run, case_idx=i, test_mode=test_mode, viz=None)
                 rec.label = run["label"]
                 records.append(rec)
 
-    # ── เขียน CSV ──
+    # ── Write CSV ──
     stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     prefix = getattr(cfg, "RESULTS_PREFIX", "lead_matrix")
     # embed TEST_MODE in the filename so each result file states what it tested
     # (e.g. lead_matrix_original_*.csv, lead_matrix_latency_comp_all_*.csv); timestamp keeps it unique
     csv_path = os.path.join(cfg.RESULTS_DIR, f"{prefix}_{test_mode}_{stamp}.csv")
     write_csv(records, csv_path)
-    print(f"\n[CSV] เขียนผลที่ {csv_path}")
+    print(f"\n[CSV] wrote results to {csv_path}")
 
-    # ── สรุป + เช็ก 20% ──
+    # ── Summarize + check 20% ──
     summary = summarize(records)
     print("\n" + "=" * 72)
-    print("สรุปต่อสมองกล (ฉาก lead-brake):")
+    print("Summary per controller (lead-brake scenario):")
     labels = [r["label"] for r in matrix_runs]
     for label in labels:
         if label not in summary:
@@ -91,8 +91,8 @@ def main():
             if prop not in summary:
                 continue
             delta = (summary[prop]["rc"] - summary[base]["rc"]) * 100
-            status = "✓ ผ่าน" if delta >= 20 else "✗ ยังไม่ถึง — จูน DYN_K_* / REQ_*_FRAC หรือ DELAY_FRAMES"
-            print(f"Δ Rc ({prop} − {base}) = {delta:+.1f}%  | เป้า +20%: {status}")
+            status = "✓ Pass" if delta >= 20 else "✗ Not yet — tune DYN_K_* / REQ_*_FRAC or DELAY_FRAMES"
+            print(f"Δ Rc ({prop} − {base}) = {delta:+.1f}%  | target +20%: {status}")
     print("=" * 72)
     print(f"[TEST_MODE={test_mode}]  CSV: {csv_path}")
 

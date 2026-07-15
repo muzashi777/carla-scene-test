@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """
-รัน 1 เคส (จาก SINGLE_CASE ใน config) พร้อมแสดงภาพ — ไว้ดีบัก/จูน/พรีเซนต์
-วิธีใช้:  python run_single.py
-สลับสมองกล/หน่วง/ตัวแปร: แก้ SINGLE_* ใน config/scenario_cutin.py
+Run a single case (from SINGLE_CASE in config) with display — for debugging / tuning / presentation.
+Usage:  python run_single.py
+Switch controller / delay / variables: edit SINGLE_* in config/scenario_cutin.py
 """
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -31,7 +31,7 @@ def main():
         if viz is not None and viz_out is not None:
             last_frame, result_txt, quit_flag = viz_out
             if not quit_flag:
-                sess.unlock()   # ปลด sync ให้เดินดูฉากใน CARLA ได้
+                sess.unlock()   # release sync so the scene can be walked through in CARLA
                 viz.finish(last_frame, result_txt)
             viz.close()
 

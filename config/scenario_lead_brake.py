@@ -1,136 +1,140 @@
 # -*- coding: utf-8 -*-
 """
-ไฟล์ตั้งค่ากลางของฉาก lead-brake (รถนำวิ่งนำอยู่ข้างหน้า แล้วเบรกกระทันหัน)
+Central configuration file for the lead-brake scenario (lead vehicle driving ahead then braking suddenly)
 ----------------------------------------------------------------------
-สถานการณ์ (Euro-NCAP CCRb): มีรถนำวิ่งอยู่ข้างหน้า ego ในเลนเดียวกัน
-           ด้วยความเร็ว "เท่ากับ ego" (ตั้งค่าได้) รักษาระยะห่างคงที่
-           แล้วจู่ ๆ รถนำ "เบรกกระทันหัน" จนหยุด → ทดสอบ AEB ว่า ego เบรกทันไหม
-แยกขาดจากฉาก cut-in: แก้ค่าที่นี่ที่เดียว แล้ว run_single_lead.py / run_matrix_lead.py ใช้ตาม
-โครงสร้าง/พารามิเตอร์ส่วนใหญ่ยกมาจาก config/scenario_cutin.py (สมองกล/YOLO/CPEIM เหมือนกัน)
+Scenario (Euro-NCAP CCRb): a lead vehicle drives ahead of ego in the same lane
+           at a speed "equal to ego" (configurable), maintaining a constant gap,
+           then the lead vehicle suddenly "brakes hard" to a stop
+           → tests whether AEB causes ego to brake in time
+Separate from the cut-in scenario: edit values here only,
+then run_single_lead.py / run_matrix_lead.py will follow.
+Most structure/parameters carried over from config/scenario_cutin.py
+(controller/YOLO/CPEIM are identical).
 """
 import os
 
-# ── การเชื่อมต่อ CARLA ─────────────────────────────────────────────
+# ── CARLA Connection ─────────────────────────────────────────────
 HOST = "localhost"
 PORT = 2000
 TIMEOUT = 10.0
 
-# ── พารามิเตอร์ซิม ─────────────────────────────────────────────────
+# ── Simulation Parameters ─────────────────────────────────────────────────
 FIXED_DT  = 0.05          # 20 FPS (sync mode)
 MAX_TICKS = 400
 LOG_EVERY = 10
-SETTLE_TICKS = 20         # tick เปล่าให้ฉากนิ่งก่อนปล่อยรถ
-STOP_KMH  = 0.6           # ต่ำกว่านี้ถือว่าหยุดสนิท
-END_Y     = -60.0         # ego เลยจุดนี้ = วิ่งทะลุจุดที่ควรชนไปแล้ว (กันค้าง)
+SETTLE_TICKS = 20         # empty ticks to let the scene settle before releasing vehicles
+STOP_KMH  = 0.6           # below this speed the vehicle is considered fully stopped
+END_Y     = -60.0         # ego past this point = overshot the expected collision point (prevents hanging)
 GRAVITY   = 9.81
 
-# ── ตำแหน่งรถ (พิกัดโลก จากต้นแบบ scene03) ─────────────────────────
-EGO_SPAWN  = dict(x=3.02, y=-8.70, z=1.15, yaw=-90)            # ego เริ่มที่นี่ วิ่งไปทาง -Y
-# รถนำ (lead) อยู่ "เลนเดียวกัน หันทางเดียวกัน" ข้างหน้า ego
-#   y ของ lead ตอน spawn = EGO_SPAWN.y − headway_d (ดู runner) ส่วนระยะห่างเป็นตัวแปรทดสอบ
+# ── Vehicle Positions (world coordinates, from scene03 prototype) ─────────────────────────
+EGO_SPAWN  = dict(x=3.02, y=-8.70, z=1.15, yaw=-90)            # ego starts here, driving in the -Y direction
+# Lead vehicle is "same lane, same heading" ahead of ego
+#   lead's y at spawn = EGO_SPAWN.y − headway_d (see runner); gap distance is a test variable
 LEAD_SPAWN = dict(x=3.02, z=1.15, yaw=-90,
                   model="vehicle.ue4.audi.tt")
 
-# ── พฤติกรรมรถนำ: วิ่งนำ → พอวิ่งได้ระยะหนึ่งก็เบรกกระทันหันจนหยุด ──
-LEAD_BRAKE_AFTER_M = 8.0   # รถนำวิ่งไปได้ไกลเท่านี้ (ม.) จากจุด spawn แล้วค่อย "เบรกกระทันหัน"
+# ── Lead vehicle behaviour: drives ahead → after travelling a set distance, brakes hard to a stop ──
+LEAD_BRAKE_AFTER_M = 8.0   # lead travels this far (m) from spawn before "braking hard"
 
-# LEAD_DECEL: ความหน่วงตอนรถนำเบรก (m/s²)
-# Euro-NCAP CCRb 2023 §3.4 กำหนด 6 m/s² เป็นกรณีมาตรฐาน; 4.0 ≈ การเบรกปานกลาง
-# ปรับจาก environment variable ได้โดยไม่ต้องแก้ไฟล์:
+# LEAD_DECEL: deceleration of the lead vehicle when braking (m/s²)
+# Euro-NCAP CCRb 2023 §3.4 specifies 6 m/s² as the standard case; 4.0 ≈ moderate braking
+# Adjustable via environment variable without editing this file:
 #   LEAD_DECEL=6.0 python run_matrix_lead.py
 LEAD_DECEL = float(os.environ.get("LEAD_DECEL", "4.0"))
-LEAD_SAME_AS_EGO   = True  # True = ความเร็วรถนำ = ความเร็ว ego ในทุกเคส (ตามโจทย์ "เท่ากัน")
-                           # False = ใช้รายการ MATRIX["lead_speed_kmh"] เป็นตัวแปรแยกต่างหาก
+LEAD_SAME_AS_EGO   = True  # True = lead speed equals ego speed in every case (per the "equal speed" requirement)
+                           # False = use MATRIX["lead_speed_kmh"] list as a separate variable
 
-# ── นิยามระยะห่างรถนำ: เวลา (THW) แทนระยะคงที่ ──
-#   THW (time headway, วินาที) สมจริง/มาตรฐานกว่าระยะคงที่ เพราะระยะจริงโตตามความเร็ว
-#   ระยะจริง (m) = ego_speed (m/s) × THW   เช่น 50 km/h × 1.5s ≈ 20.8 m
-USE_THW     = True                  # True = ใช้ THW (วินาที), False = ใช้ระยะคงที่ headway_d (พฤติกรรมเดิม)
-HEADWAY_THW = [1.0, 1.5, 2.0, 2.5, 3.0]  # ค่า THW ที่ไล่ทดสอบ (วินาที) — ใช้เมื่อ USE_THW=True
+# ── Lead vehicle headway definition: time-based (THW) instead of fixed distance ──
+#   THW (time headway, seconds) is more realistic/standard than fixed distance
+#   because actual gap scales with speed
+#   actual gap (m) = ego_speed (m/s) × THW   e.g. 50 km/h × 1.5s ≈ 20.8 m
+USE_THW     = True                  # True = use THW (seconds), False = use fixed headway_d (legacy behaviour)
+HEADWAY_THW = [1.0, 1.5, 2.0, 2.5, 3.0]  # THW values to sweep (seconds) — used when USE_THW=True
 
-# ── กล้อง ───────────────────────────────────────────────────────────
+# ── Cameras ───────────────────────────────────────────────────────────
 CAM_W, CAM_H = 1280, 720
-CAM_FRONT_TF = dict(x=3.5, y=0.2, z=1.60, pitch=8)             # กล้องหน้าติด ego (ใช้กับ YOLO)
-CAM_TOP_TF   = dict(x=-2.0, y=-6.0, z=3.5, pitch=-15, yaw=45)  # กล้อง top view (โชว์เฉยๆ)
+CAM_FRONT_TF = dict(x=3.5, y=0.2, z=1.60, pitch=8)             # front camera mounted on ego (used with YOLO)
+CAM_TOP_TF   = dict(x=-2.0, y=-6.0, z=3.5, pitch=-15, yaw=45)  # top-view camera (display only)
 CAM_FOV_DEG = 90.0
 
-# ── YOLO (ตัวตรวจจับว่ามีรถในเลนไหม) ───────────────────────────────
+# ── YOLO (detector for vehicles in the lane) ───────────────────────────────
 YOLO_MODEL  = "yolov8n.pt"
-YOLO_DEVICE = "cpu"       # "cpu" หรือ "cuda"
+YOLO_DEVICE = "cpu"       # "cpu" or "cuda"
 CONF_THRESH = 0.45
 IOU_THRESH  = 0.45
 TARGET_CLASSES = [0, 1, 2, 3, 5, 7, 9, 11]
-VEHICLE_CLS = (2, 3, 5, 7)        # car, moto, bus, truck → ใช้ตัดสินว่าเป็น "รถ"
+VEHICLE_CLS = (2, 3, 5, 7)        # car, moto, bus, truck → used to classify as a "vehicle"
 CLASS_COLORS = {0:(0,255,0),1:(255,165,0),2:(0,0,255),3:(255,0,255),
                 5:(0,165,255),7:(128,0,128),9:(0,255,255),11:(255,255,0)}
 
-# แถบเลน ego เป็นพิกเซล — รถนำอยู่กลางเลนพอดี YOLO เห็นง่ายกว่าฉาก cut-in
+# Ego lane band in pixels — lead vehicle is centred in the lane, easier for YOLO to detect than cut-in
 LANE_LEFT  = 520
 LANE_RIGHT = 760
 MIN_BOX_H  = 90
 
-# ── แหล่งเกตตรวจจับ ──
-#   "groundtruth" = ใช้ตำแหน่งจริงจาก CARLA ว่า lead อยู่ในเส้นทางข้างหน้าไหม (เชื่อถือได้/ทำซ้ำได้)
-#   "yolo" / "both_or" = ตามฉาก cut-in
+# ── Detection gate source ──
+#   "groundtruth" = use true CARLA position to check whether lead is in the forward path (reliable/repeatable)
+#   "yolo" / "both_or" = same as cut-in scenario
 DETECTION_SOURCE = "groundtruth"
 
-# ทางเดิน (corridor) ของ ego สำหรับเกต ground-truth — วัดในกรอบพิกัด ego
-INPATH_HALF_WIDTH = 1.8    # ครึ่งความกว้างเลน (m)
-INPATH_MAX_RANGE  = 80.0   # มองไปข้างหน้าไกลสุด (m) — เผื่อ headway สูง
+# Ego corridor for the ground-truth gate — measured in ego's coordinate frame
+INPATH_HALF_WIDTH = 1.8    # half lane width (m)
+INPATH_MAX_RANGE  = 80.0   # maximum forward look-ahead distance (m) — allows for large headway values
 
 # ── predictive corridor ──
-# ฉากนี้รถนำอยู่ในเลนข้างหน้าตรง ๆ ตลอด (ไม่ได้พุ่งเข้าด้านข้าง) จึงปิด predict
-# detected เป็น True ตั้งแต่ยังวิ่งตามกัน แต่ ttc≈inf จนกว่ารถนำจะเบรก → เบรกถูกจังหวะ
+# In this scenario the lead vehicle stays directly ahead (it does not cut in from the side), so prediction is disabled
+# detected is True from the start while following, but ttc≈inf until the lead brakes → correct brake timing
 INPATH_PREDICT   = False
 INPATH_LOOKAHEAD = 0.0
 
-# ── การจับคู่เฟรมกล้องกับ snapshot โลก ──
+# ── Camera frame / world snapshot synchronisation ──
 FRAME_SYNC = True
 
-# ── ระยะผิวถึงผิว (surface gap) ──
-# ฉากนี้ชนแบบท้ายชนหน้า (rear-end) รถสองคันหันทางเดียวกัน
-# จึงหัก (ครึ่งความยาว ego + ครึ่งความยาว lead) ออกจากระยะศูนย์กลาง
-AUTO_GAP_OFFSET = True     # True = คำนวณจาก bounding box อัตโนมัติ (ego.extent.x + lead.extent.x)
-GAP_OFFSET = 4.5           # ใช้ค่านี้เมื่อ AUTO_GAP_OFFSET=False (ม.)
+# ── Surface-to-surface gap ──
+# This scenario is a rear-end collision; both vehicles face the same direction
+# so subtract (half ego length + half lead length) from the centre-to-centre distance
+AUTO_GAP_OFFSET = True     # True = computed automatically from bounding box (ego.extent.x + lead.extent.x)
+GAP_OFFSET = 4.5           # used when AUTO_GAP_OFFSET=False (m)
 
-# ── โมเดลการเบรกของ ego ──
+# ── Ego braking model ──
 BRAKE_MODEL = "kinematic"
 
-# ── ความลื่นถนน μ ───────────────────────────────────────────────────
+# ── Road friction μ ───────────────────────────────────────────────────
 MU_DRY = 0.85
 MU_WET = 0.40
 
 # ══════════════════════════════════════════════════════════════════
-#  เคสเดี่ยว สำหรับ run_single_lead.py (ดีบัก/พรีเซนต์ มีภาพ)
+#  Single case for run_single_lead.py (debug/demo, with display)
 # ══════════════════════════════════════════════════════════════════
 SINGLE_CASE = dict(
-    ego_speed_kmh  = 50.0,    # ความเร็วรถเรา (v_x)
-    lead_speed_kmh = 50.0,    # ความเร็วรถนำก่อนเบรก (ปกติ = ego ตามโจทย์ "เท่ากัน")
-    mu             = MU_WET,   # ความลื่นถนน
-    headway_thw    = 1.5,     # ระยะห่างเป็นเวลา (วินาที) — ใช้เมื่อ USE_THW=True (50km/h×1.5s≈20.8m)
-    headway_d      = 20.0,    # ระยะห่างคงที่ (เมตร) — ใช้เมื่อ USE_THW=False
+    ego_speed_kmh  = 50.0,    # ego vehicle speed (v_x)
+    lead_speed_kmh = 50.0,    # lead vehicle speed before braking (normally = ego per the "equal speed" requirement)
+    mu             = MU_WET,   # road friction coefficient
+    headway_thw    = 1.5,     # time-based headway (seconds) — used when USE_THW=True (50km/h×1.5s≈20.8m)
+    headway_d      = 20.0,    # fixed headway distance (metres) — used when USE_THW=False
 )
 SINGLE_CONTROLLER  = "proposed"   # "baseline" | "proposed"
-SINGLE_DELAY_FRAMES = 0           # หน่วงการรับรู้ (เฟรม) 0=ทันที, 16≈0.8s
-SHOW_WINDOW = True                # โชว์หน้าต่าง OpenCV ไหม
+SINGLE_DELAY_FRAMES = 0           # perception delay (frames) 0=immediate, 16≈0.8s
+SHOW_WINDOW = True                # whether to show the OpenCV window
 
 # ══════════════════════════════════════════════════════════════════
-#  TEST MATRIX สำหรับ run_matrix_lead.py (ไล่อัตโนมัติ ไม่มีภาพ)
-#  ฉาก lead-brake = 5 speed × 5 headway × 2 μ = 50 เคส/สมองกล
-#  default เทียบ 3 สมองกล (baseline, proposed, proposed_enhanced) = 150 รัน
-#  (ค่า default: ความเร็วรถนำ = ความเร็ว ego เพราะ LEAD_SAME_AS_EGO=True
-#   และวัดระยะห่างเป็น THW เพราะ USE_THW=True → ไล่ headway_thw)
+#  TEST MATRIX for run_matrix_lead.py (automated sweep, no display)
+#  lead-brake scenario = 5 speed × 5 headway × 2 μ = 50 cases/controller
+#  default compares 3 controllers (baseline, proposed, proposed_enhanced) = 150 runs
+#  (default: lead speed = ego speed because LEAD_SAME_AS_EGO=True
+#   and headway is measured as THW because USE_THW=True → sweeps headway_thw)
 # ══════════════════════════════════════════════════════════════════
 MATRIX = dict(
-    ego_speed_kmh  = [20.0, 30.0, 40.0, 50.0, 60.0],   # 20 km/h = ความเร็วต่ำในเมือง/พื้นที่จอดรถ
-    headway_thw    = HEADWAY_THW,                 # ระยะห่างเป็นเวลา (วินาที) — ใช้เมื่อ USE_THW=True
-    headway_d      = [10.0, 15.0, 20.0, 25.0],   # ระยะห่างคงที่ (ม.) — ใช้เมื่อ USE_THW=False
-    mu             = [MU_DRY, MU_WET],            # แรงเสียดทานถนน
-    lead_speed_kmh = [30.0, 50.0],               # ใช้เฉพาะตอน LEAD_SAME_AS_EGO=False
+    ego_speed_kmh  = [20.0, 30.0, 40.0, 50.0, 60.0],   # 20 km/h = low urban/parking-area speed
+    headway_thw    = HEADWAY_THW,                 # time-based headway (seconds) — used when USE_THW=True
+    headway_d      = [10.0, 15.0, 20.0, 25.0],   # fixed headway distance (m) — used when USE_THW=False
+    mu             = [MU_DRY, MU_WET],            # road friction
+    lead_speed_kmh = [30.0, 50.0],               # used only when LEAD_SAME_AS_EGO=False
 )
-# เทียบสมองกลไหนบ้าง + หน่วงเฟรมของแต่ละตัว
-#   default ฉาก CCRb นี้เทียบ 3 ทาง: baseline (TTC คงที่) vs proposed (dynamic-TTC)
-#   vs proposed_enhanced (required-decel) — ทั้งหมดบนเคสชุดเดียวกัน delay 0
+# Which controllers to compare + per-controller frame delay
+#   default for this CCRb scenario: 3-way comparison: baseline (fixed TTC) vs proposed (dynamic-TTC)
+#   vs proposed_enhanced (required-decel) — all on the same case set, delay 0
 # ── Controllers registered for all test modes ──────────────────────────────────
 # Add new controllers here — build_matrix_runs() picks them up in all modes automatically.
 CONTROLLERS = ["baseline", "proposed", "proposed_enhanced"]
@@ -142,15 +146,15 @@ NOISE_SIGMA_VR_SWEEP = [0.0, 0.2, 0.5, 1.0]  # rel_speed / lead_speed noise sigm
 DROPOUT_P_SWEEP      = [0.0, 0.05, 0.1, 0.2] # dropout probability per tick
 
 # ── Latency-compensation experiment (latency_comp / latency_mismatch) ─────────
-#   comp controllers ชดเชย perception latency: enhanced_predictive (predictor) /
-#   enhanced_inflation (threshold inflation). proposed_enhanced = control (ไม่ชดเชย),
-#   proposed = crossover reference. ดู control/enhanced_*.py และ CHANGES_latency_compensation.md
+#   comp controllers compensate for perception latency: enhanced_predictive (predictor) /
+#   enhanced_inflation (threshold inflation). proposed_enhanced = control (no compensation),
+#   proposed = crossover reference. See control/enhanced_*.py and CHANGES_latency_compensation.md
 COMP_CONTROLLERS      = ["proposed_enhanced", "enhanced_predictive",
                          "enhanced_inflation", "proposed"]
-COMP_MISMATCH_CTRL    = "enhanced_predictive"  # ตัวที่กวาด mismatch (ไวต่อ delay-mismatch สุด)
-COMP_MISMATCH_DELAY   = 8                       # delay จริงที่ฉีดคงที่ (เฟรม) ในโหมด mismatch
-COMP_MISMATCH_L_FRAMES = [4, 8, 12, 16]         # L' ที่ใช้ชดเชย: under(4) / exact(8) / over(12,16)
-COMP_R_SAFE           = 0.0                      # ระยะเผื่อยืนหยุดของ enhanced_inflation (m)
+COMP_MISMATCH_CTRL    = "enhanced_predictive"  # controller swept for mismatch (most sensitive to delay-mismatch)
+COMP_MISMATCH_DELAY   = 8                       # fixed injected real delay (frames) in mismatch mode
+COMP_MISMATCH_L_FRAMES = [4, 8, 12, 16]         # L' values used to compensate: under(4) / exact(8) / over(12,16)
+COMP_R_SAFE           = 0.0                      # stopping margin for enhanced_inflation (m)
 
 
 def build_matrix_runs(mode="original"):
@@ -160,13 +164,13 @@ def build_matrix_runs(mode="original"):
     TEST_MODE=latency         — sweep delay_frames across LATENCY_DELAY_FRAMES × controllers
     TEST_MODE=noise           — sweep noise_sigma_m across NOISE_SIGMA_M_SWEEP × controllers
     TEST_MODE=latency_comp    — COMP_CONTROLLERS × delay sweep × comp_source=oracle
-                                (upper bound: รู้ L เป๊ะ กู้ Rc ได้แค่ไหน)
-    TEST_MODE=latency_mismatch— enhanced_predictive × delay คงที่ × comp_L_frames กวาด
-                                (ความเปราะเมื่อประมาณ L ผิด: under/exact/over-compensate)
-    TEST_MODE=latency_comp_all— CONTROLLERS (base ทุกตัว) × delay sweep × predictive-oracle
-                                layer (predict=True). วาง predictor ไว้หน้า base controller ทุกตัว
-                                (สมมาตรกับ degradation layer) → เทียบว่า predictor กู้ Rc ของ
-                                แต่ละ base controller ได้แค่ไหนที่ latency เดียวกัน (upper bound: รู้ L เป๊ะ)
+                                (upper bound: knowing L exactly — how much Rc can be recovered)
+    TEST_MODE=latency_mismatch— enhanced_predictive × fixed delay × comp_L_frames swept
+                                (fragility when L is estimated incorrectly: under/exact/over-compensate)
+    TEST_MODE=latency_comp_all— CONTROLLERS (all base controllers) × delay sweep × predictive-oracle
+                                layer (predict=True). Places the predictor in front of every base controller
+                                (symmetric with the degradation layer) → compares how much Rc the predictor recovers for
+                                each base controller at the same latency (upper bound: knowing L exactly)
     """
     if mode == "latency":
         return [
@@ -181,7 +185,7 @@ def build_matrix_runs(mode="original"):
             for c in CONTROLLERS for sigma_m in NOISE_SIGMA_M_SWEEP
         ]
     if mode == "latency_comp":
-        # oracle: ชดเชยด้วย L = delay จริงที่ฉีด (comp_L_frames = delay_frames)
+        # oracle: compensate with L = actual injected delay (comp_L_frames = delay_frames)
         return [
             dict(label=f"{c}_d{d}f", controller=c, delay_frames=d,
                  comp_source="oracle", comp_L_frames=d,
@@ -189,7 +193,7 @@ def build_matrix_runs(mode="original"):
             for c in COMP_CONTROLLERS for d in LATENCY_DELAY_FRAMES
         ]
     if mode == "latency_mismatch":
-        # mismatched: delay จริงคงที่ แต่ชดเชยด้วย L' ที่ต่างออกไป (under/exact/over)
+        # mismatched: fixed real delay but compensate with a different L' (under/exact/over)
         d = COMP_MISMATCH_DELAY
         return [
             dict(label=f"{COMP_MISMATCH_CTRL}_d{d}f_L{cl}f", controller=COMP_MISMATCH_CTRL,
@@ -200,8 +204,8 @@ def build_matrix_runs(mode="original"):
     if mode == "latency_comp_all":
         # predictive-oracle compensation applied as a LAYER in front of every base
         # controller (predict=True → runner inserts PerceptionPredictor; see perception/predict.py).
-        # oracle: ชดเชยด้วย L = delay จริงที่ฉีด (comp_L_frames = delay_frames). ใช้ CONTROLLERS
-        # (base ทุกตัว) ตัวเดียวกันกับโหมด original/latency เพื่อความยุติธรรม (controller-swap protocol)
+        # oracle: compensate with L = actual injected delay (comp_L_frames = delay_frames). Uses CONTROLLERS
+        # (all base) same as original/latency mode for fairness (controller-swap protocol)
         return [
             dict(label=f"{c}_pred_d{d}f", controller=c, delay_frames=d,
                  comp_source="oracle", comp_L_frames=d, predict=True,
@@ -218,23 +222,23 @@ def build_matrix_runs(mode="original"):
 
 MATRIX_RUNS = build_matrix_runs(os.environ.get("TEST_MODE", "original"))
 RESULTS_DIR = "results"
-RESULTS_PREFIX = "lead_matrix"     # ไฟล์ผล → results/lead_matrix_*.csv (แยกจากฉาก cut-in)
+RESULTS_PREFIX = "lead_matrix"     # result file → results/lead_matrix_*.csv (separate from cut-in scenario)
 
 # ══════════════════════════════════════════════════════════════════
-#  พารามิเตอร์สมองกล (เหมือนฉาก cut-in เพื่อเทียบกันได้ตรง ๆ)
+#  Controller parameters (same as cut-in scenario for direct comparison)
 # ══════════════════════════════════════════════════════════════════
-# baseline: TTC คงที่
+# baseline: fixed TTC
 TTC_WARN_FULL = 1.6
 TTC_BRAKE_FULL = 0.6
 
-# proposed: TTC ปรับตามความเร็ว + ความลื่น
+# proposed: TTC adjusted for speed + friction
 DYN_V0      = 40.0
 DYN_MU0     = 0.85
 DYN_K_SPEED = 1.2
 DYN_K_MU    = 1.5
 PARTIAL_BRAKE = 0.4
 
-# proposed_enhanced: required-deceleration (รู้ทั้ง μ และการเบรกของรถข้างหน้า)
+# proposed_enhanced: required-deceleration (knows both μ and the lead vehicle's braking)
 #   urgency = a_req / (μ·g) ; a_req = v_e² / (2·(gap + v_l²/2a_l))
-REQ_FULL_FRAC = 0.9       # urgency ≥ ค่านี้ → เบรกเต็ม (90% ของเพดาน μ·g)
-REQ_WARN_FRAC = 0.6       # urgency ≥ ค่านี้ → เบรกบางส่วน (PARTIAL_BRAKE)
+REQ_FULL_FRAC = 0.9       # urgency ≥ this value → full brake (90% of μ·g ceiling)
+REQ_WARN_FRAC = 0.6       # urgency ≥ this value → partial brake (PARTIAL_BRAKE)

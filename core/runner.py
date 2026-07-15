@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 """
-เครื่องรันเคสเดียว — ผูกทุกโมดูลเข้าด้วยกัน คืน RunRecord
-ใช้ร่วมกันทั้ง run_single.py (ส่ง viz เข้ามา = มีภาพ) และ run_matrix.py (viz=None = headless)
-ระยะ/ความเร็วสัมพัทธ์ที่ป้อนสมองกลเป็น ground-truth จาก CARLA (ตามที่เลือกไว้)
-หน่วงเฟรมหน่วงเฉพาะ 'การตรวจเจอ' (detected) เลียน perception latency ตามต้นแบบ
+Single-case runner — wires all modules together and returns a RunRecord.
+Shared by run_single.py (viz passed in = display enabled) and run_matrix.py (viz=None = headless).
+Range/relative-speed values fed to the controller are CARLA ground-truth (as configured).
+Frame delay applies only to the 'detected' flag to simulate perception latency.
 """
 import queue
 import math
@@ -19,7 +19,7 @@ from core.conflict import cutin_is_conflict
 from control.base_controller import make_controller, compensation_latency
 from perception.degrade import PerceptionDegrader
 from perception.predict import PerceptionPredictor
-# import เพื่อให้ register() ทำงาน (ขึ้นทะเบียนชื่อ controller)
+# imported to trigger register() calls (registers controller names in the registry)
 import control.baseline_static_ttc   # noqa: F401
 import control.proposed_dynamic_ttc  # noqa: F401
 import control.proposed_enhanced     # noqa: F401
@@ -38,9 +38,9 @@ def run_case(sess, cfg, case, controller_name, delay_frames, detector,
     _seed = (sum(ord(c) for c in spec.get("label", controller_name)) * 10000 + case_idx) % (2**32)
 
     label = f"{controller_name}"
-    # ── ตรวจสอบ conflict-case (kinematic, ไม่ต้องเปิดซิม) ──
-    # เคสนี้เป็น conflict ถ้า ego ที่ไม่เบรกเลยจะชน dart ภายใน MAX_TICKS×FIXED_DT วินาที
-    # ทุกเคสใน cut-in matrix เป็น conflict (ดูการพิสูจน์ใน core/conflict.py)
+    # ── check conflict case (kinematic, no sim needed) ──
+    # a case is a conflict if an ego that never brakes would hit the dart within MAX_TICKS×FIXED_DT seconds
+    # all cases in the cut-in matrix are conflicts (see proof in core/conflict.py)
     is_conflict = cutin_is_conflict(case, cfg)
     rec = RunRecord(
         label=label, controller=controller_name, delay_frames=delay_frames,
@@ -54,7 +54,7 @@ def run_case(sess, cfg, case, controller_name, delay_frames, detector,
     rec.dropout_mode   = spec.get("dropout_mode", "freeze")
     rec.test_mode      = test_mode
     rec.seed           = _seed
-    # พารามิเตอร์ชดเชย latency (comp controllers ใช้; controller อื่นไม่สนใจ)
+    # latency compensation parameters (used by comp controllers; ignored by others)
     rec.comp_source    = spec.get("comp_source", "")
     rec.comp_L_frames  = spec.get("comp_L_frames",
                                   delay_frames if spec.get("comp_source") == "oracle" else 0)
@@ -75,12 +75,12 @@ def run_case(sess, cfg, case, controller_name, delay_frames, detector,
         actor_list.append(dart)
         dart.apply_control(carla.VehicleControl(brake=1.0, hand_brake=True))
 
-        # ── กล้องหน้า (ให้ YOLO) ──
+        # ── front camera (for YOLO) ──
         cam = actors.attach_rgb_camera(world, ego, cfg.CAM_FRONT_TF,
                                        cfg.CAM_W, cfg.CAM_H, lambda i: front_q.put(i),
                                        fov=cfg.CAM_FOV_DEG)
         actor_list.append(cam)
-        # ── กล้อง top view (เฉพาะตอนโชว์ภาพ) ──
+        # ── top-view camera (only when display is active) ──
         if viz is not None:
             cam_top = actors.attach_rgb_camera(world, ego, cfg.CAM_TOP_TF,
                                                cfg.CAM_W, cfg.CAM_H, lambda i: top_q.put(i))
@@ -94,7 +94,7 @@ def run_case(sess, cfg, case, controller_name, delay_frames, detector,
         col = actors.attach_collision_sensor(world, ego, on_col)
         actor_list.append(col)
 
-        # ── ปล่อยให้ฉากนิ่ง ──
+        # ── allow the scene to settle ──
         for _ in range(cfg.SETTLE_TICKS):
             wf = world.tick()
             try:
@@ -104,8 +104,8 @@ def run_case(sess, cfg, case, controller_name, delay_frames, detector,
             except queue.Empty:
                 pass
 
-        # ── เตรียมสมองกล + ฉาก ──
-        # ส่ง run_spec เข้า controller (comp controllers อ่านค่า L จากนี้; ตัวอื่นไม่แตะ)
+        # ── initialise controller + scenario ──
+        # run_spec is passed to the controller (comp controllers read L from it; others ignore it)
         controller = make_controller(controller_name, cfg, run_spec=spec)
         controller.reset()
         degrader = PerceptionDegrader(
@@ -117,9 +117,9 @@ def run_case(sess, cfg, case, controller_name, delay_frames, detector,
             seed=_seed,
         )
         degrader.reset()
-        # ── predictive-oracle compensation layer (TEST_MODE=latency_comp_all เท่านั้น) ──
-        # วาง predictor ไว้ "หน้า" base controller: degrade ทำให้ perception ล้าสมัย,
-        # predict พยากรณ์กลับให้สด (สมมาตรกัน). โหมดอื่นไม่มี key 'predict' → predictor=None (no-op)
+        # ── predictive-oracle compensation layer (TEST_MODE=latency_comp_all only) ──
+        # the predictor sits "in front of" the base controller: degrade makes perception stale,
+        # predict forecasts it back to the present (symmetric). Other modes have no 'predict' key → predictor=None (no-op)
         predictor = None
         if spec.get("predict"):
             L_sec, _cf, _cs = compensation_latency(spec, cfg)
@@ -134,9 +134,9 @@ def run_case(sess, cfg, case, controller_name, delay_frames, detector,
         mfdd = MfddTracker(case["ego_speed_kmh"])
         ego_y0 = ego.get_location().y
 
-        # ── ระยะ "ผิวถึงผิว" = ระยะศูนย์กลาง − ขนาดตัวรถ ──
-        # dist2d เป็นระยะจุดศูนย์กลาง การชนจริงเกิดเมื่อกันชนแตะ (gap≈0)
-        # dart พุ่งมาขวางตั้งฉาก → ด้านที่หันเข้า ego คือด้านข้าง (extent.y)
+        # ── surface-to-surface gap = centre distance − vehicle sizes ──
+        # dist2d is the centre-to-centre distance; physical contact occurs when the bumpers touch (gap≈0)
+        # dart crosses perpendicular → the face presented to ego is the side (extent.y)
         if cfg.AUTO_GAP_OFFSET:
             try:
                 gap_offset = ego.bounding_box.extent.x + dart.bounding_box.extent.y
@@ -144,7 +144,7 @@ def run_case(sess, cfg, case, controller_name, delay_frames, detector,
                 gap_offset = cfg.GAP_OFFSET
         else:
             gap_offset = cfg.GAP_OFFSET
-        print(f"[GAP] gap_offset = {gap_offset:.2f} m (หักขนาดตัวรถออกจากระยะศูนย์กลาง)")
+        print(f"[GAP] gap_offset = {gap_offset:.2f} m (vehicle sizes subtracted from centre-to-centre distance)")
 
         def surface_gap(dc):
             return max(0.0, dc - gap_offset)
@@ -157,19 +157,19 @@ def run_case(sess, cfg, case, controller_name, delay_frames, detector,
         min_dist = 1e9
         min_gap = 1e9
         peak_decel = 0.0
-        brake_v_model = None     # ความเร็วในโมเดล kinematic (เริ่มจับเมื่อเบรกครั้งแรก) — ดู apply_kinematic_brake
+        brake_v_model = None     # velocity in the kinematic model (initialised on first brake application) — see apply_kinematic_brake
         prev_v_ms = actors.speed_ms(ego)
         result_txt = "TIMEOUT"
         last_frame = None
         quit_flag = False
 
-        # ── ประมาณความเร็ว/ความหน่วงของ dart จากการเคลื่อนที่จริง (รีเซ็ตทุกเคส) ──
-        # ใช้ป้อนสมองกล proposed_enhanced (required-decel) — แชร์เท่ากันทุกสมองกล
-        # ใช้ความเร็ว 'ตามแนวการวิ่งของ ego' (longitudinal): dart พุ่งตัดข้าง → ส่วนนี้ ≈ 0
-        #   → required_decel มอง dart เป็นสิ่งกีดขวางนิ่ง (a_req=v_e²/2·gap) แทนที่จะคิดว่ามันวิ่งหนีไปข้างหน้า
+        # ── estimate dart speed / deceleration from its actual motion (reset each case) ──
+        # fed to the proposed_enhanced controller (required-decel) — shared across all controllers
+        # uses 'longitudinal' speed along the ego's heading: dart cuts laterally → this component ≈ 0
+        #   → required_decel treats dart as a stationary obstacle (a_req=v_e²/2·gap) rather than one moving ahead
         prev_lead_ms = actors.long_speed_along(ego, dart)
         lead_decel_ema = 0.0
-        rec.a_max = case["mu"] * cfg.GRAVITY     # เพดานความหน่วง μ·g (คงที่ทั้งเคส)
+        rec.a_max = case["mu"] * cfg.GRAVITY     # deceleration ceiling μ·g (constant for the entire case)
 
         for tick in range(cfg.MAX_TICKS):
             wf = world.tick()
@@ -190,25 +190,25 @@ def run_case(sess, cfg, case, controller_name, delay_frames, detector,
             min_dist = min(min_dist, d)
             min_gap = min(min_gap, gap)
 
-            # ── เช็กชน 'ทันที' หลังอ่านสถานะ (ก่อนเสีย YOLO/วาดภาพ) ──
-            # ทำให้ break ไว และเฟรมที่ค้างไว้ = เฟรมตอนชนจริง
+            # ── check for collision immediately after reading state (before YOLO / frame drawing) ──
+            # ensures fast break-out and that the retained frame matches the actual collision frame
             if collision["hit"]:
                 result_txt = f"COLLISION with {collision['with']}"
                 rec.collision_with = collision["with"]
                 rec.collision_speed_kmh = v_kmh
 
-            scen.update()   # คุม dart (trigger/จอดขวาง)
+            scen.update()   # control dart (trigger / block)
 
             # ── PERCEPTION ──
-            # YOLO: วาดบนจอเสมอ (ดีบัก/สมจริง)
+            # YOLO: always drawn on display (debug / realism)
             frame = detector.carla_image_to_bgr(img)
             yolo_now, in_band, box_h = detector.detect(frame)
-            # ground-truth: dart อยู่/กำลังเข้าทางเดินข้างหน้า ego ไหม (predictive)
+            # ground-truth: whether dart is in / entering the ego's forward path (predictive)
             gt_now, lon, lat = actors.inpath_hazard(
                 ego, dart, cfg.INPATH_MAX_RANGE, cfg.INPATH_HALF_WIDTH,
                 cfg.INPATH_LOOKAHEAD if cfg.INPATH_PREDICT else 0.0)
 
-            # เลือกเกตที่ใช้ตัดสินใจเบรกตาม DETECTION_SOURCE
+            # select the detection gate used for braking decisions, per DETECTION_SOURCE
             src = cfg.DETECTION_SOURCE
             if src == "yolo":
                 detected_now = yolo_now
@@ -217,19 +217,19 @@ def run_case(sess, cfg, case, controller_name, delay_frames, detector,
             else:  # "groundtruth"
                 detected_now = gt_now
 
-            # ── ระยะ/ความเร็วสัมพัทธ์ ground-truth (ผิวถึงผิว) → TTC ──
+            # ── ground-truth range / relative speed (surface-to-surface) → TTC ──
             rel_speed = max(0.0, (prev_gap - gap) / cfg.FIXED_DT)
             prev_gap = gap
             ttc = (gap / rel_speed) if rel_speed > 1e-3 else math.inf
 
-            # ── ความเร็ว/ความหน่วงของ dart (ground-truth, ตามแนวการวิ่งของ ego) ──
-            # longitudinal: dart พุ่งตัดข้างมีส่วนนี้ ≈ 0 → ถูกมองเป็นสิ่งกีดขวางนิ่งใน required_decel
+            # ── dart speed / deceleration (ground-truth, along ego's longitudinal axis) ──
+            # longitudinal component ≈ 0 for a laterally cutting dart → treated as a stationary obstacle in required_decel
             lead_ms = actors.long_speed_along(ego, dart)
             raw_lead_decel = max(0.0, (prev_lead_ms - lead_ms) / cfg.FIXED_DT)
             prev_lead_ms = lead_ms
-            lead_decel_ema = 0.3 * raw_lead_decel + 0.7 * lead_decel_ema   # EMA ลด noise
+            lead_decel_ema = 0.3 * raw_lead_decel + 0.7 * lead_decel_ema   # EMA to reduce noise
 
-            # ── หน่วงเฟรมเฉพาะ detected (perception latency) ──
+            # ── frame-delay on detected flag only (perception latency) ──
             det_buffer.append(detected_now)
             perceived = det_buffer[0]
 
@@ -239,11 +239,11 @@ def run_case(sess, cfg, case, controller_name, delay_frames, detector,
             ego_state = EgoState(speed_ms=actors.speed_ms(ego),
                                  speed_kmh=v_kmh, mu=case["mu"])
             perc, ego_state = degrader.apply(perc, ego_state)
-            # ชดเชย latency ด้วย predictor layer (ถ้าเปิด) — พยากรณ์ perception ไปข้างหน้า L วินาที
+            # compensate latency via predictor layer (if enabled) — forecasts perception L seconds forward
             if predictor is not None:
                 perc, ego_state = predictor.apply(perc, ego_state)
 
-            # ── สมองกลตัดสินใจ ──
+            # ── controller decision ──
             ctrl = controller.decide(perc, ego_state)
             is_braking = ctrl.brake > 0.0
 
@@ -254,25 +254,25 @@ def run_case(sess, cfg, case, controller_name, delay_frames, detector,
                     rec.a_req_at_brake = actors.required_decel(
                         ego_state.speed_ms, lead_ms, lead_decel_ema, gap)
                 if cfg.BRAKE_MODEL == "kinematic":
-                    # ความหน่วงที่ทำได้จริงถูก clamp ที่เพดานแรงเสียดทาน a_max = μ·g (ดู actors.apply_kinematic_brake)
+                    # achievable deceleration is clamped at the friction ceiling a_max = μ·g (see actors.apply_kinematic_brake)
                     if brake_v_model is None:
-                        brake_v_model = actors.speed_ms(ego)   # เริ่มจากความเร็วจริงตอนเริ่มเบรก
+                        brake_v_model = actors.speed_ms(ego)   # initialised from the actual speed at the moment braking begins
                     brake_v_model, a_applied = actors.apply_kinematic_brake(
                         ego, brake_v_model, ctrl.brake, case["mu"], cfg.FIXED_DT, cfg.GRAVITY)
                     if brake_engaged and a_applied > peak_decel:
-                        peak_decel = a_applied   # peak_decel = ความหน่วงจริงหลัง clamp (≤ a_max)
+                        peak_decel = a_applied   # peak_decel = actual deceleration after clamping (≤ a_max)
                 else:
                     ego.apply_control(ctrl)
             elif not brake_engaged:
-                scen.cruise_ego()   # รักษาความเร็ว (เฉพาะตอนยังไม่เริ่มเบรก)
-            # ถ้า engaged แล้วแต่ controller ไม่สั่งเบรก (ไม่ควรเกิดเพราะ latch) → ปล่อยไหล ไม่รีเซ็ตความเร็ว
+                scen.cruise_ego()   # maintain ego speed (only while braking has not started)
+            # if already engaged but controller issues no brake (should not happen due to latch) → coast, do not reset speed
 
-            # ── ติดตาม MFDD + ความหน่วงทันที/สูงสุด ──
+            # ── track MFDD + instantaneous / peak deceleration ──
             v_ms = actors.speed_ms(ego)
             inst_decel = (prev_v_ms - v_ms) / cfg.FIXED_DT if tick > 0 else 0.0
             prev_v_ms = v_ms
-            # kinematic: peak_decel มาจากความหน่วงจริงหลัง clamp (≤ a_max) ในขั้นเบรกข้างบนแล้ว
-            # โมเดลอื่น (apply_control): วัด peak จากค่าอ่านกลับความเร็วจริง
+            # kinematic: peak_decel comes from the actual clamped deceleration (≤ a_max) in the brake block above
+            # other models (apply_control): peak measured from the actual speed readback
             if brake_engaged and cfg.BRAKE_MODEL != "kinematic" and inst_decel > peak_decel:
                 peak_decel = inst_decel
             mfdd.update(v_kmh, abs(ego_y - ego_y0))
@@ -283,7 +283,7 @@ def run_case(sess, cfg, case, controller_name, delay_frames, detector,
                       f"bk={ctrl.brake:.2f} decel={inst_decel:5.2f} "
                       f"{'BRAKE' if brake_engaged else 'cruise'} det={perceived}")
 
-            # ── โชว์ภาพ (ถ้ามี viz) ──
+            # ── render display (if viz is active) ──
             if viz is not None:
                 ov = [f"{controller_name} delay={delay_frames}f | v {v_kmh:.0f} | gap {gap:.1f}m ttc {ttc:.2f}",
                       f"{'BRAKE!' if brake_engaged else 'cruising'} | det[{src}]: {perceived} (lon {lon:.1f} lat {lat:.1f})"]
@@ -293,7 +293,7 @@ def run_case(sess, cfg, case, controller_name, delay_frames, detector,
                 if q:
                     result_txt = "QUIT"; quit_flag = True; break
 
-            # ── เงื่อนไขจบ ──
+            # ── termination conditions ──
             if collision["hit"]:
                 result_txt = f"COLLISION with {collision['with']}"
                 rec.collision_with = collision["with"]
@@ -311,7 +311,7 @@ def run_case(sess, cfg, case, controller_name, delay_frames, detector,
                 result_txt = "NO BRAKE / passed"
                 break
 
-        # ── สรุปดัชนี ──
+        # ── summarise indices ──
         rec.result_txt = result_txt
         rec.min_dist = min_dist
         rec.a_b_mfdd = mfdd.mfdd()
@@ -327,11 +327,11 @@ def run_case(sess, cfg, case, controller_name, delay_frames, detector,
         print(f"RESULT [{controller_name} delay={delay_frames}f "
               f"v={case['ego_speed_kmh']:.0f} mu={case['mu']} Δd={case['trigger_d']:.0f}] : {result_txt}")
         if brake_info:
-            print(f"  เริ่มเบรก tick={brake_info[0]} gap={brake_info[1]:.1f}m "
+            print(f"  brake engaged tick={brake_info[0]} gap={brake_info[1]:.1f}m "
                   f"v={brake_info[2]:.1f} ttc={rec.t_c_warn:.2f}s")
         print(f"  s={rec.s_clearance:.2f}m a_b(MFDD)={rec.a_b_mfdd:.2f} "
               f"peak_decel={rec.peak_decel:.2f} brake_dist={rec.brake_distance:.2f}m")
-        print(f"  μ={case['mu']} → ความหน่วงสูงสุดที่ทฤษฎีให้ได้ ≈ μ·g = {case['mu']*cfg.GRAVITY:.2f} m/s²")
+        print(f"  μ={case['mu']} → theoretical maximum deceleration ≈ μ·g = {case['mu']*cfg.GRAVITY:.2f} m/s²")
         print(f"  Δv={rec.dv_speed_var:.1f} min_gap={min_gap:.1f}m (min_dist={min_dist:.1f}m)")
         print("=" * 60)
 

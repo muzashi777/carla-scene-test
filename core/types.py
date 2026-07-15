@@ -1,23 +1,23 @@
 # -*- coding: utf-8 -*-
-"""โครงสร้างข้อมูลกลางที่ส่งให้สมองกล (ป้องกัน import วน)"""
+"""Central data structures passed to controllers (prevents circular imports)."""
 from dataclasses import dataclass
 
 
 @dataclass
 class Perception:
-    """สิ่งที่สมองกล 'มองเห็น' ในเฟรมนี้ (หลังหน่วงเฟรมแล้ว)"""
-    detected: bool        # YOLO เจอรถในแถบเลน ego ไหม
-    distance: float       # ระยะถึงสิ่งกีดขวาง (m) — ground-truth จาก CARLA
-    rel_speed: float      # ความเร็วเข้าหากัน (m/s, >0 = กำลังเข้าใกล้)
-    ttc: float            # distance / rel_speed (วินาที, inf ถ้าไม่เข้าใกล้)
-    box_h: float = 0.0    # ความสูงกล่อง YOLO (px) — ไว้ดีบัก/วาด
-    # ── ข้อมูลรถข้างหน้า (ground-truth, แชร์ให้ทุกสมองกลเท่ากันเพื่อความยุติธรรม) ──
-    lead_speed: float = 0.0   # ความเร็วรถข้างหน้า (m/s) — baseline จะไม่ใช้ก็ได้
-    lead_decel: float = 0.0   # ความหน่วงรถข้างหน้าที่ "ประมาณจากการเคลื่อนที่จริง" (m/s², ≥0)
+    """What the controller 'sees' in this frame (after delay frames are applied)"""
+    detected: bool        # Did YOLO detect a vehicle in the ego lane?
+    distance: float       # Distance to obstacle (m) — ground-truth from CARLA
+    rel_speed: float      # Closing speed (m/s, >0 = approaching)
+    ttc: float            # distance / rel_speed (seconds, inf if not closing)
+    box_h: float = 0.0    # YOLO bounding box height (px) — for debug/drawing
+    # ── lead vehicle info (ground-truth, shared equally across all controllers for fairness) ──
+    lead_speed: float = 0.0   # Lead vehicle speed (m/s) — baseline may ignore this
+    lead_decel: float = 0.0   # Lead vehicle deceleration "estimated from actual motion" (m/s², ≥0)
 
 
 @dataclass
 class EgoState:
     speed_ms: float
     speed_kmh: float
-    mu: float             # ความลื่นถนนปัจจุบัน (รู้จาก config ของเคส)
+    mu: float             # Current road friction coefficient (from case config)

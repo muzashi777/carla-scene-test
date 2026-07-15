@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 """
-สมองกล baseline — TTC คงที่ (อ้างอิงระบบเบรกฉุกเฉินสากลในเปเปอร์ Sensors)
-  TTC ≤ 1.6s → เบรกบางส่วน
-  TTC ≤ 0.6s → เบรกเต็ม
-ไม่ปรับตามความเร็ว/ความลื่น → คาดว่าจะเบรกไม่ทันในเคสเร็ว+ลื่น (นี่คือจุดอ่อนที่ proposed จะแก้)
+Baseline controller — fixed TTC thresholds (reference: international AEB standard from the Sensors paper)
+  TTC ≤ 1.6s → partial brake
+  TTC ≤ 0.6s → full brake
+No adaptation to speed / friction → expected to fail in fast + slippery cases (the weakness that proposed fixes)
 """
 from control.base_controller import BaseController, register
 
@@ -24,6 +24,6 @@ class BaselineStaticTTC(BaseController):
         return 0.0
 
     def decide(self, perc, ego):
-        # คิด desired เฉพาะเมื่อเห็นอันตราย หรือเคยเริ่มเบรกแล้ว (latch ค้าง)
+        # compute desired only when a hazard is detected or braking has already started (latch held)
         desired = self._desired(perc) if (perc.detected or self._engaged) else 0.0
         return self._emit(desired)

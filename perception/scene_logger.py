@@ -1,25 +1,26 @@
 # -*- coding: utf-8 -*-
 """
-Perception-quality logger สำหรับฉาก 3DGS (READ-ONLY pass — แยกจาก AEB ทั้งหมด)
+Perception-quality logger for 3DGS scenes (READ-ONLY pass — separate from AEB entirely)
 ──────────────────────────────────────────────────────────────────────────────
-เป้าหมาย (สำหรับเปเปอร์): บอกว่า YOLO ตรวจจับวัตถุที่ 'เป็นส่วนหนึ่งของฉาก 3DGS ที่สร้างใหม่'
-(รถจอด, ไฟจราจร, ป้าย ฯลฯ) ได้ดีแค่ไหน → สนับสนุนข้อสรุปว่าฉากจริงที่ reconstruct มาให้
-อินพุต perception สมจริง
+Goal (for paper): report how well YOLO detects objects that 'are part of the
+reconstructed 3DGS scene' (parked cars, traffic lights, signs, etc.) →
+supports the conclusion that the reconstructed real scene provides realistic
+perception input
 
-หลักการ:
-  - ขับ 'กล้อง ego' ไปตามแนววิ่งตรงเดิม (จาก EGO_SPAWN.y → END_Y ตามแกน −Y)
-  - pass "background": ไม่ spawn รถใด ๆ เลย — กล้องเดี่ยว ๆ (sensor) เลื่อนไปตาม trajectory
-    → detection ทั้งหมดมาจากฉาก 3DGS ที่ reconstruct เท่านั้น
-  - pass "with_actor": แนว trajectory เดิมเป๊ะ + spawn 'รถเป้าหมาย' (dart) ที่จุด DART_SPAWN
-    (จอดนิ่ง) → เทียบการตรวจจับ 'actor ที่แทรกเข้าไป' กับ 'วัตถุในฉากที่ reconstruct'
-  - ทุก ๆ N เฟรม หรือ M เมตรของระยะวิ่ง → รัน YOLO บนเฟรม RGB แล้ว log 'ทุก detection'
+Principle:
+  - Drive the 'ego camera' along the original straight trajectory (from EGO_SPAWN.y → END_Y along the −Y axis)
+  - pass "background": spawn no vehicles at all — a single camera (sensor) moves along the trajectory
+    → all detections come from the reconstructed 3DGS scene only
+  - pass "with_actor": exact same trajectory + spawn 'target vehicle' (dart) at DART_SPAWN
+    (stationary) → compare detection of 'inserted actor' against 'objects in the reconstructed scene'
+  - Every N frames or M meters of travel → run YOLO on the RGB frame and log 'all detections'
 
-ไม่ยุ่งกับ controller / scenario / runner / braking / CSV ผลเดิมใด ๆ ทั้งสิ้น
-ใช้ YOLO (yolov8n.pt), ความละเอียดภาพ, conf threshold ชุดเดียวกับเกต AEB เป๊ะ
-(ดู detector.detect_all) → ตัวเลขสะท้อนตัวตรวจจับตัวเดียวกัน
+Does not touch any controller / scenario / runner / braking / existing CSV results
+Uses YOLO (yolov8n.pt), image resolution, and conf threshold identical to the AEB gate
+(see detector.detect_all) → numbers reflect the same detector
 
-หมายเหตุ DO-NOT: ไม่คำนวณ precision/recall และไม่เรียก confidence ว่า "accuracy" —
-ฉาก reconstruct ไม่มี ground-truth label เรา log แค่ raw detection + confidence ดิบ
+Note DO-NOT: do not compute precision/recall and do not call confidence "accuracy" —
+the reconstructed scene has no ground-truth labels; we log only raw detections + raw confidence
 """
 import math
 import queue
@@ -29,11 +30,11 @@ import carla
 from core import actors
 
 
-# ── องค์ประกอบเวกเตอร์ของกรอบพิกัด ego (yaw องศา) ──
+# ── Ego coordinate frame basis vectors (yaw in degrees) ──
 def _basis(yaw_deg):
-    """คืน (forward, right) unit vectors บนระนาบ XY ตามแบบ CARLA (left-handed)
+    """Return (forward, right) unit vectors on the XY plane in CARLA convention (left-handed)
     yaw=0   → forward=(1,0)  right=(0,1)
-    yaw=-90 → forward=(0,-1) right=(1,0)  (ego ของเราวิ่งไปทาง −Y)
+    yaw=-90 → forward=(0,-1) right=(1,0)  (our ego travels in the −Y direction)
     """
     y = math.radians(yaw_deg)
     fwd = (math.cos(y), math.sin(y))
@@ -42,22 +43,22 @@ def _basis(yaw_deg):
 
 
 def _camera_world_transform(ego_spawn, cam_tf, ego_y):
-    """คำนวณ transform โลกของกล้องหน้า ให้ตรงกับตอนกล้องติดบน ego ที่ (x0, ego_y, z0, yaw0)
-    โดย cam_tf เป็น local offset (เฟรม ego) เหมือนที่ใช้ตอน attach กล้องเข้า ego จริง
-    คืน (camera_world_transform, ego_world_location)
+    """Compute the world transform of the front camera as if it were mounted on ego at (x0, ego_y, z0, yaw0)
+    where cam_tf is the local offset (ego frame) identical to what is used when attaching the camera to ego
+    Returns (camera_world_transform, ego_world_location)
     """
     yaw0 = ego_spawn["yaw"]
     fwd, right = _basis(yaw0)
-    cx = cam_tf.get("x", 0.0)   # ไปข้างหน้า (เฟรม ego)
-    cy = cam_tf.get("y", 0.0)   # ออกข้าง
-    cz = cam_tf.get("z", 0.0)   # ขึ้นบน
+    cx = cam_tf.get("x", 0.0)   # forward (ego frame)
+    cy = cam_tf.get("y", 0.0)   # lateral
+    cz = cam_tf.get("z", 0.0)   # upward
     ego_x = ego_spawn["x"]
     ego_z = ego_spawn["z"]
     wx = ego_x + fwd[0] * cx + right[0] * cy
     wy = ego_y + fwd[1] * cx + right[1] * cy
     wz = ego_z + cz
     rot = carla.Rotation(
-        pitch=cam_tf.get("pitch", 0.0),     # ego pitch/roll = 0 → ใช้ค่ากล้องตรง ๆ
+        pitch=cam_tf.get("pitch", 0.0),     # ego pitch/roll = 0 → use camera values directly
         yaw=yaw0 + cam_tf.get("yaw", 0.0),
         roll=cam_tf.get("roll", 0.0),
     )
@@ -66,7 +67,7 @@ def _camera_world_transform(ego_spawn, cam_tf, ego_y):
 
 
 def _spawn_world_camera(world, w, h, fov, world_tf, sink):
-    """spawn กล้อง RGB เดี่ยว ๆ (ไม่ attach กับรถ) ที่ transform โลกที่กำหนด"""
+    """Spawn a standalone RGB camera (not attached to a vehicle) at the given world transform"""
     bp = world.get_blueprint_library().find("sensor.camera.rgb")
     bp.set_attribute("image_size_x", str(w))
     bp.set_attribute("image_size_y", str(h))
@@ -81,14 +82,14 @@ def run_pass(sess, cfg, detector, pass_type,
              sample_every_m=1.0, sample_every_frames=0,
              drive_kmh=30.0, settle_ticks=20, max_ticks=4000, viz=None):
     """
-    ขับกล้องไปตาม trajectory ตรง (EGO_SPAWN.y → END_Y) แล้ว log ทุก detection
-      pass_type            : "background" (ไม่ spawn รถ) | "with_actor" (spawn dart)
-      sample_every_m  > 0  : สุ่มตัวอย่างทุก ๆ M เมตรของระยะวิ่ง (โหมดหลัก)
-      sample_every_frames  : ถ้า sample_every_m<=0 ให้ใช้ทุก ๆ N เฟรมแทน
-      viz                  : PercepViz (โชว์ OpenCV) หรือ None (headless) — วาดบนเฟรมที่ sample
-    คืน (rows, stats)
-      rows  : list ของ dict (หนึ่งแถวต่อหนึ่ง detection)
-      stats : dict สรุป pass นี้ (n_frames_sampled, n_detections, per_class{name:[conf,...]})
+    Drive the camera along the straight trajectory (EGO_SPAWN.y → END_Y) and log all detections
+      pass_type            : "background" (no vehicle spawned) | "with_actor" (spawn dart)
+      sample_every_m  > 0  : sample every M meters of travel (primary mode)
+      sample_every_frames  : if sample_every_m<=0, sample every N frames instead
+      viz                  : PercepViz (display OpenCV window) or None (headless) — draws on sampled frames
+    Returns (rows, stats)
+      rows  : list of dicts (one row per detection)
+      stats : dict summarising this pass (n_frames_sampled, n_detections, per_class{name:[conf,...]})
     """
     world = sess.world
     actor_list = []
@@ -100,26 +101,26 @@ def run_pass(sess, cfg, detector, pass_type,
 
     y0 = cfg.EGO_SPAWN["y"]
     y_end = cfg.END_Y
-    step = actors.kmh_to_ms(drive_kmh) * cfg.FIXED_DT     # ระยะที่เลื่อนต่อ tick (m, ไปทาง −Y)
+    step = actors.kmh_to_ms(drive_kmh) * cfg.FIXED_DT     # distance moved per tick (m, in the −Y direction)
 
     try:
-        # ── (with_actor) spawn รถเป้าหมาย dart ที่จุดเดิม จอดนิ่ง = "actor ที่แทรกเข้าฉาก" ──
+        # ── (with_actor) spawn target vehicle dart at the original position, stationary = "actor inserted into the scene" ──
         if pass_type == "with_actor":
             dart = actors.spawn_vehicle(world, **cfg.DART_SPAWN)
             if dart is None:
-                print("[PERCEP] ⚠ spawn dart (ego target) ไม่สำเร็จ — ข้าม pass with_actor")
+                print("[PERCEP] ⚠ spawn dart (ego target) failed — skipping pass with_actor")
                 return rows, dict(pass_type=pass_type, n_frames_sampled=0,
                                   n_detections=0, per_class={})
             actor_list.append(dart)
             actors.hold(dart)
 
-        # ── spawn กล้องเดี่ยวที่จุดเริ่ม trajectory ──
+        # ── spawn standalone camera at the start of trajectory ──
         cam_tf0, _ = _camera_world_transform(cfg.EGO_SPAWN, cfg.CAM_FRONT_TF, y0)
         cam = _spawn_world_camera(world, cfg.CAM_W, cfg.CAM_H, cfg.CAM_FOV_DEG,
                                   cam_tf0, lambda i: cam_q.put(i))
         actor_list.append(cam)
 
-        # ── ปล่อยให้ฉากนิ่ง ──
+        # ── let the scene settle ──
         for _ in range(settle_ticks):
             wf = world.tick()
             try:
@@ -127,7 +128,7 @@ def run_pass(sess, cfg, detector, pass_type,
             except queue.Empty:
                 pass
 
-        print(f"[PERCEP] pass='{pass_type}' ขับกล้อง y {y0:.1f} → {y_end:.1f} "
+        print(f"[PERCEP] pass='{pass_type}' driving camera y {y0:.1f} → {y_end:.1f} "
               f"(step {step:.3f} m/tick); "
               f"sample {'every %.2f m' % sample_every_m if sample_every_m > 0 else 'every %d frames' % sample_every_frames}")
 
@@ -146,7 +147,7 @@ def run_pass(sess, cfg, detector, pass_type,
                 y -= step; tick += 1
                 continue
 
-            # ── ตัดสินใจว่าจะ sample เฟรมนี้ไหม ──
+            # ── decide whether to sample this frame ──
             if sample_every_m > 0:
                 do_sample = (last_sample_y is None) or ((last_sample_y - y) >= sample_every_m - 1e-9)
             else:
@@ -181,14 +182,14 @@ def run_pass(sess, cfg, detector, pass_type,
                     per_class.setdefault(d["class_name"], []).append(d["confidence"])
                     n_dets += 1
 
-                # ── โชว์หน้าต่าง OpenCV (เฉพาะเฟรมที่ sample = ตรงกับที่ log) ──
+                # ── show OpenCV window (sampled frames only = matches what is logged) ──
                 if viz is not None:
                     overlay = [
                         f"pass={pass_type}  frame={frame_index}  y={y:.1f}m  dets={len(dets)}",
                         f"conf>={detector.conf}  res={cfg.CAM_W}x{cfg.CAM_H}  (press 'q' to stop)",
                     ]
                     if viz.show(frame, dets, overlay):
-                        print("[PERCEP] ผู้ใช้กด 'q' — หยุด pass นี้")
+                        print("[PERCEP] user pressed 'q' — stopping this pass")
                         n_frames += 1
                         frame_index += 1
                         break
@@ -201,7 +202,7 @@ def run_pass(sess, cfg, detector, pass_type,
             y -= step
             tick += 1
 
-        print(f"[PERCEP] pass='{pass_type}' จบ: {n_frames} เฟรม, {n_dets} detections")
+        print(f"[PERCEP] pass='{pass_type}' done: {n_frames} frames, {n_dets} detections")
         stats = dict(pass_type=pass_type, n_frames_sampled=n_frames,
                      n_detections=n_dets, per_class=per_class)
         return rows, stats

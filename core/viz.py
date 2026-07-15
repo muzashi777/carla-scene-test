@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 """
-ตัวโชว์ภาพด้วย OpenCV (ใช้เฉพาะ run_single.py) — แยกออกมาให้ headless ไม่ต้อง import cv2
-วาดเฉพาะกรอบตรวจจับ:
-  1) กล่อง YOLO (เขียว) = ทุกวัตถุที่โมเดลเห็น
-  2) กล่อง hazard (ส้ม/แดง) = เป้าที่อยู่ในเงื่อนไข corridor และกำลังเสี่ยงชน
+OpenCV display module (used only by run_single.py) — separated so headless mode does not need to import cv2
+Draws detection boxes only:
+  1) YOLO box (green) = every object the model sees
+  2) hazard box (orange/red) = target that meets the corridor condition and is at risk of collision
 """
 import cv2
 import numpy as np
@@ -13,14 +13,14 @@ class Viz:
     def __init__(self, cfg):
         self.cfg = cfg
         self.win = "AEB cut-in - YOLO + hazard"
-        # intrinsic matrix ของกล้องหน้า (ใช้ฉาย 3D→2D)
+        # intrinsic matrix of the front camera (used to project 3D→2D)
         w, h, fov = cfg.CAM_W, cfg.CAM_H, cfg.CAM_FOV_DEG
         focal = w / (2.0 * np.tan(fov * np.pi / 360.0))
         self.K = np.array([[focal, 0, w / 2.0],
                            [0, focal, h / 2.0],
                            [0, 0, 1.0]])
 
-    # ── projection 3D โลก → พิกเซลภาพ ─────────────────────────────
+    # ── 3D world → image pixel projection ─────────────────────────────
     def _project(self, camera, loc):
         try:
             w2c = np.array(camera.get_transform().get_inverse_matrix())
@@ -29,13 +29,13 @@ class Viz:
         p = np.array([loc.x, loc.y, loc.z, 1.0])
         pc = w2c @ p
         pc = np.array([pc[1], -pc[2], pc[0]])  # UE → standard camera axes
-        if pc[2] <= 0.05:                      # อยู่หลังกล้อง
+        if pc[2] <= 0.05:                      # behind the camera
             return None
         pi = self.K @ pc
         return pi[0] / pi[2], pi[1] / pi[2]
 
     def _project_actor_box(self, camera, actor):
-        """ฉาย 8 มุมของ bounding box → คืนกรอบ 2D (x1,y1,x2,y2) หรือ None"""
+        """Project 8 corners of the bounding box → return 2D box (x1,y1,x2,y2) or None"""
         try:
             verts = actor.bounding_box.get_world_vertices(actor.get_transform())
         except Exception:
@@ -60,7 +60,7 @@ class Viz:
         return x1, y1, x2, y2
 
     def _draw_hazard(self, frame, hazard):
-        """วาดเฉพาะกรอบของเป้าที่อยู่ในเงื่อนไข corridor"""
+        """Draw only the box for targets that meet the corridor condition"""
         if not hazard or not hazard.get("in_path"):
             return
         box = self._project_actor_box(hazard["camera"], hazard["actor"])
@@ -68,14 +68,14 @@ class Viz:
             return
         x1, y1, x2, y2 = box
         if hazard.get("engaged"):
-            color = (0, 0, 255)          # แดง = กำลังเบรก
+            color = (0, 0, 255)          # red = braking
         else:
-            color = (0, 165, 255)        # ส้ม = อยู่ในเส้นทาง
+            color = (0, 165, 255)        # orange = in path
         cv2.rectangle(frame, (x1, y1), (x2, y2), color, 3)
 
     def frame(self, frame_bgr, results, overlay_lines, img_top, hazard=None):
         _ = overlay_lines, img_top
-        # ชั้น 1: กล่อง YOLO (เขียว = เห็นเฉยๆ)
+        # Layer 1: YOLO boxes (green = detected only)
         if results:
             for r in results:
                 for b in r.boxes:
@@ -85,7 +85,7 @@ class Viz:
                     label = f"{conf * 100:.0f}%"
                     cv2.putText(frame_bgr, label, (x1 + 2, max(y1 - 4, 12)),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 200, 0), 1, cv2.LINE_AA)
-        # ชั้น 2: กล่อง hazard (ส้ม/แดง = เป้าที่ระบบใช้ตัดสินเบรก)
+        # Layer 2: hazard box (orange/red = target the system uses to decide braking)
         self._draw_hazard(frame_bgr, hazard)
         cv2.imshow(self.win, frame_bgr)
 
@@ -97,7 +97,7 @@ class Viz:
             return
         hold = last_frame.copy()
         _ = result_txt
-        print(">>> กด 'q' ที่หน้าต่างภาพเพื่อปิด")
+        print(">>> Press 'q' on the image window to close")
         while True:
             cv2.imshow(self.win, hold)
             if cv2.waitKey(30) & 0xFF == ord('q'):

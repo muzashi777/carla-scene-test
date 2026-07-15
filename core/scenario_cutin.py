@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
 """
-ตรรกะฉาก cut-in / dart-out:
-  - ego วิ่งตรงด้วยความเร็วคงที่ (open-loop เพราะไม่มี waypoint)
-  - เมื่อระยะ ego-dart ≤ trigger_d (Δd) → dart พุ่งออกตั้งฉาก
-  - dart พุ่งมาถึงกลางเลน ego (DART_STOP_X) แล้วเบรกจอดขวาง
-ตัวฉากไม่ยุ่งกับการตัดสินใจเบรกของ ego เลย (นั่นเป็นหน้าที่ controller)
+Cut-in / dart-out scenario logic:
+  - ego drives straight at constant speed (open-loop — no waypoints)
+  - when the ego-to-dart distance ≤ trigger_d (Δd) → dart launches perpendicularly
+  - dart travels to the centre of the ego's lane (DART_STOP_X) and brakes to a standstill blocking the path
+The scenario does not interfere with the ego's braking decisions (that is the controller's responsibility).
 """
 import carla
 from core.actors import kmh_to_ms, dist2d, cruise, hold
@@ -21,12 +21,12 @@ class CutInScenario:
         self.launched = False
 
     def start(self):
-        """ปล่อย ego ออกตัวด้วยความเร็วเป้าหมาย"""
+        """Release ego at the target speed."""
         self.ego.apply_control(carla.VehicleControl(hand_brake=False))
         cruise(self.ego, self.ego_ms)
 
     def update(self):
-        """เรียกทุก tick — คุมเฉพาะ dart และ trigger คืน True เมื่อเพิ่งปล่อย dart"""
+        """Called every tick — controls only the dart and trigger; returns True on the tick the dart is first launched."""
         just_launched = False
         d = dist2d(self.ego, self.dart)
 
@@ -47,5 +47,5 @@ class CutInScenario:
         return just_launched
 
     def cruise_ego(self):
-        """รักษาความเร็ว ego (เรียกเมื่อ controller ยังไม่สั่งเบรก)"""
+        """Maintain ego speed (called when the controller has not yet commanded braking)."""
         cruise(self.ego, self.ego_ms)

@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """
-ตัวตรวจจับด้วย YOLO — หน้าที่เดียว: บอกว่า 'มีรถในแถบเลน ego และใกล้พอไหม'
-ระยะ/ความเร็วที่ใช้คำนวณ TTC จะมาจาก ground-truth ของ CARLA (ดูใน run loop)
-ตัวนี้จึงทำหน้าที่เป็น perception trigger (เลียนการตรวจจับจริง รวมถึงพลาด/หน่วงได้)
+YOLO-based detector — single responsibility: report whether 'a vehicle is in the ego lane band and close enough'
+Distance/speed used to compute TTC comes from CARLA ground-truth (see run loop)
+This module therefore acts as a perception trigger (simulates real detection, including misses/latency)
 """
 import numpy as np
 from ultralytics import YOLO
@@ -22,7 +22,7 @@ class YoloDetector:
         self.lane_left = lane_left
         self.lane_right = lane_right
         self.min_box_h = min_box_h
-        self.last_results = None   # เก็บไว้ให้ตัววาดใช้
+        self.last_results = None   # kept for the drawing module to use
 
     @staticmethod
     def carla_image_to_bgr(img):
@@ -31,10 +31,10 @@ class YoloDetector:
 
     def detect(self, frame_bgr):
         """
-        คืน (detected, in_band, best_box_h)
-          detected   = มีรถในเลนและสูงพอ (≥ min_box_h)
-          in_band    = list ของ (cx, h) ของรถทุกคันในแถบเลน
-          best_box_h = ความสูงกล่องที่ใหญ่สุดในแถบ (0 ถ้าไม่มี)
+        Returns (detected, in_band, best_box_h)
+          detected   = a vehicle is in the lane band and tall enough (≥ min_box_h)
+          in_band    = list of (cx, h) for every vehicle in the lane band
+          best_box_h = height of the tallest box in the band (0 if none)
         """
         results = self.model.predict(
             source=frame_bgr, conf=self.conf, iou=self.iou,
@@ -55,7 +55,7 @@ class YoloDetector:
         return detected, in_band, best_h
 
     def _class_name(self, cid):
-        """ชื่อคลาส COCO จาก id (รองรับทั้ง dict และ list ของ model.names)"""
+        """COCO class name from id (supports both dict and list for model.names)"""
         names = self.model.names
         try:
             return names[cid]
@@ -64,11 +64,11 @@ class YoloDetector:
 
     def detect_all(self, frame_bgr):
         """
-        รัน YOLO บนเฟรมเดียว แล้วคืน 'ทุก detection' ที่โมเดลคืนมา (ไม่กรองเลน/ความสูง)
-        ใช้สำหรับ perception-quality logging (ดู perception/scene_logger.py) เท่านั้น —
-        ไม่เกี่ยวกับเกตเบรกของ AEB (detect()) ใช้ conf/iou/classes/device ชุดเดียวกันเป๊ะ
-        จึงสะท้อนตัวตรวจจับตัวเดียวกับที่ AEB ใช้
-        คืน list ของ dict: {class_id, class_name, confidence, x1, y1, x2, y2}
+        Run YOLO on a single frame and return 'all detections' from the model (no lane/height filtering).
+        Used only for perception-quality logging (see perception/scene_logger.py) —
+        not related to the AEB brake gate (detect()); uses the exact same conf/iou/classes/device settings
+        and therefore reflects the same detector that AEB uses.
+        Returns a list of dicts: {class_id, class_name, confidence, x1, y1, x2, y2}
         """
         results = self.model.predict(
             source=frame_bgr, conf=self.conf, iou=self.iou,

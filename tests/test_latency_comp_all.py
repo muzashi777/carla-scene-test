@@ -23,7 +23,7 @@ import types as _pytypes
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-# ── mock carla (BaseController.control ใช้ carla.VehicleControl เท่านั้น) ──
+# ── mock carla (BaseController.control uses carla.VehicleControl only) ──
 if "carla" not in sys.modules:
     class _VehicleControl:
         def __init__(self, throttle=0.0, brake=0.0, steer=0.0):
@@ -75,7 +75,7 @@ def _ego(v_ms=13.9, mu=0.85):
 
 
 def _cutin_sequence():
-    """dart จอดขวาง: lead_speed=0, lead_decel=0, gap หดลงเรื่อย ๆ"""
+    """cut-in obstacle blocking path: lead_speed=0, lead_decel=0, gap shrinks steadily"""
     seq = []
     dist = 40.0
     for _ in range(60):
@@ -85,7 +85,7 @@ def _cutin_sequence():
 
 
 def _leadbrake_sequence():
-    """รถนำเบรก: lead_speed>0 ลดลง, lead_decel>0, closing โตขึ้น"""
+    """lead vehicle braking: lead_speed>0 decreasing, lead_decel>0, closing speed increases"""
     seq = []
     dist = 25.0
     v_lead = 13.9
@@ -98,7 +98,7 @@ def _leadbrake_sequence():
 
 
 def test_predictor_L0_is_identity():
-    """PerceptionPredictor(L=0) คืน Perception ที่ทุกฟิลด์เหมือนเดิม (identity)."""
+    """PerceptionPredictor(L=0) returns Perception with all fields unchanged (identity)."""
     pred = PerceptionPredictor(l_seconds=0.0)
     for p, e in (_cutin_sequence() + _leadbrake_sequence()):
         out, out_ego = pred.apply(p, e)
@@ -108,7 +108,7 @@ def test_predictor_L0_is_identity():
 
 
 def test_compensated_L0_equals_base_per_tick():
-    """compensated_X(L=0) == base controller X ทุก tick สำหรับ base controller ทุกตัว."""
+    """compensated_X(L=0) == base controller X every tick for every base controller."""
     pred = PerceptionPredictor(l_seconds=0.0)
     for name in BASE_CONTROLLERS:
         for seq_name, seq in (("cutin", _cutin_sequence()), ("leadbrake", _leadbrake_sequence())):
@@ -127,9 +127,10 @@ def test_compensated_L0_equals_base_per_tick():
 def test_predictor_wrap_matches_enhanced_predictive():
     """PerceptionPredictor + proposed_enhanced == control/enhanced_predictive per tick.
 
-    ยืนยันว่า layer ที่พยากรณ์ 'ฟิลด์ Perception' ให้ผลตรงกับ enhanced_predictive เดิม
-    ที่พยากรณ์ 'อินพุตของ required_decel' (proposed_enhanced อ่านแค่ distance/lead_speed/
-    lead_decel/detected → สองทางเท่ากันเป๊ะ) สำหรับ L in {0,4,8,16} ทั้งสองฉาก
+    Confirms that the layer predicting 'Perception fields' produces the same result as the
+    existing enhanced_predictive that predicts 'inputs to required_decel' (proposed_enhanced
+    reads only distance/lead_speed/lead_decel/detected → both paths match exactly) for
+    L in {0,4,8,16} on both scenarios.
     """
     for L_frames in (0, 4, 8, 16):
         L_sec = L_frames * CFG.FIXED_DT
@@ -151,21 +152,21 @@ def test_predictor_wrap_matches_enhanced_predictive():
 
 
 def test_predictor_L_shrinks_gap_and_ttc():
-    """L มากขึ้น → distance/ttc ที่พยากรณ์เล็กลง (เบรกเร็วขึ้น) — sanity ของ layer เอง."""
+    """Larger L → predicted distance/ttc decreases (brakes sooner) — layer-level sanity check."""
     p = _perc(distance=20.0, rel_speed=8.0, lead_speed=6.0, lead_decel=4.0)
     e = _ego()
     prev_dist, prev_ttc = math.inf, math.inf
     for L_frames in (0, 4, 8, 16):
         pred = PerceptionPredictor(l_seconds=L_frames * CFG.FIXED_DT)
         out, _ = pred.apply(p, e)
-        assert out.distance <= prev_dist + 1e-9, f"distance ต้องไม่โตเมื่อ L โต ({out.distance})"
-        assert out.ttc <= prev_ttc + 1e-9, f"ttc ต้องไม่โตเมื่อ L โต ({out.ttc})"
+        assert out.distance <= prev_dist + 1e-9, f"distance must not increase as L increases ({out.distance})"
+        assert out.ttc <= prev_ttc + 1e-9, f"ttc must not increase as L increases ({out.ttc})"
         prev_dist, prev_ttc = out.distance, out.ttc
     print("PASS test_predictor_L_shrinks_gap_and_ttc")
 
 
 def test_build_matrix_runs_latency_comp_all():
-    """latency_comp_all: |CONTROLLERS| × |LATENCY_DELAY_FRAMES| runs; โหมดเดิมไม่เปลี่ยน."""
+    """latency_comp_all: |CONTROLLERS| × |LATENCY_DELAY_FRAMES| runs; existing modes unchanged."""
     for cfg in (cutin_cfg, lead_cfg):
         runs = cfg.build_matrix_runs("latency_comp_all")
         assert len(runs) == len(cfg.CONTROLLERS) * len(cfg.LATENCY_DELAY_FRAMES), \

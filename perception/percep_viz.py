@@ -1,11 +1,11 @@
 # -*- coding: utf-8 -*-
 """
-ตัวโชว์ภาพ OpenCV เฉพาะ perception-logging pass (run_perception_log.py)
+OpenCV visualizer for the perception-logging pass only (run_perception_log.py)
 ──────────────────────────────────────────────────────────────────────
-แยกออกจาก core/viz.py ของฉาก AEB อย่างสิ้นเชิง — ไม่ถูก import โดย runner/
-scenario/controller ใด ๆ จึงไม่กระทบการทดสอบขับขี่อื่น
-วาด 'ทุก detection' ที่ YOLO คืนมา (กล่อง + ชื่อคลาส + confidence ดิบ)
-import cv2 แบบ lazy (เฉพาะตอนเปิดหน้าต่าง) เพื่อให้รัน headless ได้โดยไม่ต้องมี cv2
+Completely separate from core/viz.py used in the AEB scenario — not imported by any
+runner/scenario/controller, so it does not affect other driving tests.
+Draws all detections returned by YOLO (bounding box + class name + raw confidence).
+cv2 is imported lazily (only when a window is opened) to allow headless runs without cv2.
 """
 import cv2
 
@@ -16,14 +16,14 @@ class PercepViz:
         self.win = win
 
     def _text(self, frame, txt, org, color=(255, 255, 255), scale=0.5):
-        # วาดเส้นขอบดำก่อนเพื่อให้อ่านออกบนพื้นหลังสว่าง/มืด
+        # Draw black outline first to ensure readability on both light and dark backgrounds
         cv2.putText(frame, txt, org, cv2.FONT_HERSHEY_SIMPLEX, scale,
                     (0, 0, 0), 3, cv2.LINE_AA)
         cv2.putText(frame, txt, org, cv2.FONT_HERSHEY_SIMPLEX, scale,
                     color, 1, cv2.LINE_AA)
 
     def show(self, frame_bgr, dets, overlay_lines):
-        """วาดกล่อง detection ทั้งหมด + ข้อความหัวภาพ แล้วแสดง; คืน True ถ้าผู้ใช้กด 'q'"""
+        """Draw all detection boxes + overlay text then display; returns True if user presses 'q'"""
         for d in dets:
             color = self.cfg.CLASS_COLORS.get(d["class_id"], (0, 200, 0))
             x1, y1, x2, y2 = int(d["x1"]), int(d["y1"]), int(d["x2"]), int(d["y2"])

@@ -1,17 +1,17 @@
 # -*- coding: utf-8 -*-
 """
-สมองกล proposed_enhanced — Required-Deceleration (รู้ทั้งแรงเสียดทาน + การเบรกของรถข้างหน้า)
+proposed_enhanced controller — Required-Deceleration (aware of both friction and lead-vehicle braking)
 ----------------------------------------------------------------------
-ปัญหาของ TTC ล้วน: TTC = gap / closing_speed สมมติรถข้างหน้าวิ่งความเร็วคงที่
-  → ในฉาก CCRb (รถข้างหน้าเบรกจนหยุด) TTC ยังสูงอยู่จนระยะเหลือน้อยมาก เบรกไม่ทัน
-แนวคิดใหม่: คำนวณ "ความหน่วงที่ ego จำเป็นต้องใช้" (a_req) เทียบกับเพดานแรงเสียดทาน (μ·g)
-  a_max = μ·g                         เพดานความหน่วงที่ทำได้จริง (ขึ้นกับถนน)
-  d_lead = v_l²/2a_l                  ระยะที่รถข้างหน้ายังวิ่งต่อก่อนหยุด
-  a_req = v_e² / (2·(gap + d_lead))   ความหน่วงต่ำสุดที่ต้องใช้เพื่อหยุดทัน
-  urgency = a_req / a_max             ยิ่งเข้าใกล้ 1 = ยิ่งใกล้ขีดจำกัดถนน
-สูตรนี้รู้ทั้ง μ และการเบรกของรถข้างหน้า และทำงานถูกทั้งฉาก cut-in (dart จอด: v_l=0,d_lead=0
-→ a_req=v_e²/2gap = เคสสิ่งกีดขวางนิ่ง) และฉาก lead-brake โดยอัตโนมัติ
-* ไม่แตะ baseline และ proposed เดิม — เพิ่มตัวนี้เพื่อเทียบ 3 ทาง *
+Problem with pure TTC: TTC = gap / closing_speed assumes the lead vehicle travels at constant speed.
+  → In the CCRb scenario (lead vehicle brakes to a stop), TTC remains high until very little gap is left, too late to brake.
+New concept: compute the "deceleration ego must apply" (a_req) against the friction ceiling (μ·g).
+  a_max = μ·g                         maximum achievable deceleration (depends on road surface)
+  d_lead = v_l²/2a_l                  distance the lead vehicle will still travel before stopping
+  a_req = v_e² / (2·(gap + d_lead))   minimum deceleration needed to stop in time
+  urgency = a_req / a_max             closer to 1 = closer to the road traction limit
+This formula accounts for both μ and lead-vehicle braking, and works correctly for both the cut-in scenario
+(dart parked: v_l=0, d_lead=0 → a_req=v_e²/2gap = stationary-obstacle case) and the lead-brake scenario automatically.
+* Does not touch the original baseline and proposed — this controller is added for a 3-way comparison *
 """
 import math
 from control.base_controller import BaseController, register
@@ -22,16 +22,16 @@ from core.actors import required_decel, REQ_GAP_EPS
 class ProposedEnhancedReqDecel(BaseController):
     def __init__(self, cfg):
         self.partial = cfg.PARTIAL_BRAKE
-        self.req_full = getattr(cfg, "REQ_FULL_FRAC", 0.9)   # urgency ≥ ค่านี้ → เบรกเต็ม
-        self.req_warn = getattr(cfg, "REQ_WARN_FRAC", 0.6)   # urgency ≥ ค่านี้ → เบรกบางส่วน
+        self.req_full = getattr(cfg, "REQ_FULL_FRAC", 0.9)   # urgency ≥ this value → full brake
+        self.req_warn = getattr(cfg, "REQ_WARN_FRAC", 0.6)   # urgency ≥ this value → partial brake
         self.g0 = 9.81
-        self.last_a_req = 0.0     # ไว้ดีบัก/ตรวจสอบ (runner บันทึกเองผ่าน core.actors.required_decel)
+        self.last_a_req = 0.0     # for debug/inspection (runner logs via core.actors.required_decel)
         self.last_a_max = 0.0
         self.reset()
 
     def _desired(self, perc, ego):
         a_max = max(0.0, ego.mu) * self.g0
-        # จวนชน (gap ≤ eps) → urgency สูงสุด เบรกเต็มทันที (กันค่า a_req เพี้ยน/ระเบิดตอน gap→0)
+        # Imminent collision (gap ≤ eps) → max urgency, full brake immediately (prevent a_req diverging/blowing up as gap→0)
         if perc.distance <= REQ_GAP_EPS:
             self.last_a_req, self.last_a_max = a_max, a_max
             return 1.0
@@ -48,6 +48,6 @@ class ProposedEnhancedReqDecel(BaseController):
         return 0.0
 
     def decide(self, perc, ego):
-        # ตัดสินใจเฉพาะเมื่อ "ตรวจเจอ" (หรือ latch เบรกไปแล้ว) — เกตเดียวกับ proposed
+        # Decide only when "detected" (or brake latch already active) — same gate as proposed
         desired = self._desired(perc, ego) if (perc.detected or self._engaged) else 0.0
         return self._emit(desired)

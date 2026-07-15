@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 """
-รัน 1 เคสของฉาก lead-brake (รถนำเบรกจอดข้างหน้าในเลนเดียวกัน) พร้อมแสดงภาพ
-ไว้ดีบัก/จูน/พรีเซนต์ — แยกขาดจากฉาก cut-in
-วิธีใช้:  python run_single_lead.py
-สลับสมองกล/หน่วง/ตัวแปร: แก้ SINGLE_* ใน config/scenario_lead_brake.py
+Run a single case of the lead-brake scenario (lead vehicle brakes and stops ahead in the same lane) with display.
+For debugging / tuning / presentation — fully separate from the cut-in scenario.
+Usage:  python run_single_lead.py
+Switch controller / delay / variables: edit SINGLE_* in config/scenario_lead_brake.py
 """
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -24,7 +24,7 @@ def main():
 
     with CarlaSession(cfg.HOST, cfg.PORT, cfg.TIMEOUT, cfg.FIXED_DT) as sess:
         print(f"[SIM] sync ON dt={cfg.FIXED_DT}s | controller={cfg.SINGLE_CONTROLLER} "
-              f"delay={cfg.SINGLE_DELAY_FRAMES}f | ฉาก=lead-brake")
+              f"delay={cfg.SINGLE_DELAY_FRAMES}f | scene=lead-brake")
         rec, viz_out = run_case(
             sess, cfg, cfg.SINGLE_CASE,
             cfg.SINGLE_CONTROLLER, cfg.SINGLE_DELAY_FRAMES, detector, viz=viz,
@@ -32,7 +32,7 @@ def main():
         if viz is not None and viz_out is not None:
             last_frame, result_txt, quit_flag = viz_out
             if not quit_flag:
-                sess.unlock()   # ปลด sync ให้เดินดูฉากใน CARLA ได้
+                sess.unlock()   # release sync so the scene can be walked through in CARLA
                 viz.finish(last_frame, result_txt)
             viz.close()
 

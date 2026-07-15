@@ -1,15 +1,15 @@
 # -*- coding: utf-8 -*-
-"""จัดการ session กับ CARLA: เปิด sync mode, คืนค่า settings เดิมตอนจบ"""
+"""Manage a CARLA session: enable sync mode on entry and restore original settings on exit."""
 import carla
 
 
 class CarlaSession:
     """
-    ใช้แบบ context manager:
+    Use as a context manager:
         with CarlaSession(host, port) as sess:
             world = sess.world
             ...
-    sync mode จะถูกเปิดให้อัตโนมัติ และคืนค่าเดิมเมื่อออกจาก with
+    Sync mode is enabled automatically and restored to its original state on exit.
     """
     def __init__(self, host, port, timeout, fixed_dt):
         self.client = carla.Client(host, port)
@@ -28,7 +28,7 @@ class CarlaSession:
         return self
 
     def unlock(self):
-        """ปลด sync mode กลับเป็น real-time (ไว้เดินดูฉากใน CARLA หลังจบ)"""
+        """Disable sync mode and return to real-time (useful for manually inspecting the scene in CARLA after a run)."""
         s = self.world.get_settings()
         s.synchronous_mode = False
         self.world.apply_settings(s)

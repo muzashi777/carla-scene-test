@@ -1,55 +1,55 @@
 # -*- coding: utf-8 -*-
 """
-รัน perception-quality logging pass บนฉาก 3DGS แล้ว export CSV (READ-ONLY)
+Run a perception-quality logging pass on a 3DGS scene and export to CSV (READ-ONLY)
 ─────────────────────────────────────────────────────────────────────────
-วิธีใช้:  เปิด CARLA (โหลดฉาก 3DGS), วาง yolov8n.pt ไว้โฟลเดอร์นี้ แล้ว
+Usage:  Launch CARLA (load 3DGS scene), place yolov8n.pt in this folder, then
           python run_perception_log.py
 
-ทำอะไร:
-  - ขับ 'กล้อง ego' ไปตาม trajectory ตรงเดิม (EGO_SPAWN.y → END_Y)
-  - pass "background": ไม่ spawn รถเลย → log detection ของฉาก 3DGS ที่ reconstruct ล้วน ๆ
-  - pass "with_actor" (ออปชัน): + spawn รถเป้าหมาย (dart) เพื่อเทียบ actor แทรก vs ฉาก
-  - ทุก M เมตร (หรือ N เฟรม) รัน YOLO แล้วเขียน 1 แถว/1 detection ลง CSV
-  - เขียนไฟล์ sidecar (.meta.json) บันทึก conf threshold, ความละเอียด, สรุปต่อคลาส
+What it does:
+  - Drives the 'ego camera' along the same straight trajectory (EGO_SPAWN.y → END_Y)
+  - pass "background": spawns no vehicle → logs detections from the purely reconstructed 3DGS scene
+  - pass "with_actor" (optional): + spawns the target vehicle (dart) to compare inserted actor vs. scene
+  - Every M metres (or N frames) runs YOLO and writes 1 row per detection to CSV
+  - Writes a sidecar file (.meta.json) recording conf threshold, resolution, and per-class summary
 
-ไม่แตะ controller / scenario / runner / braking / CSV ผลของ AEB เดิมใด ๆ
-ใช้ YOLO/ความละเอียด/conf threshold เดียวกับเกต AEB (อ่านจาก config.scenario_cutin)
+Does not touch any existing controller / scenario / runner / braking / AEB result CSV.
+Uses the same YOLO model / resolution / conf threshold as the AEB gate (read from config.scenario_cutin).
 
-DO-NOT: ไม่คำนวณ precision/recall, ไม่เรียก confidence ว่า accuracy
-        (ฉาก reconstruct ไม่มี ground-truth label — log แค่ raw detection + confidence)
+DO-NOT: Do not compute precision/recall; do not label confidence as accuracy.
+        (the reconstructed scene has no ground-truth labels — log raw detections + confidence only)
 """
 import sys, os, csv, json, datetime, statistics
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-import config.scenario_cutin as cfg     # ใช้ trajectory/กล้อง/YOLO ร่วมกับฉาก cut-in
+import config.scenario_cutin as cfg     # shares trajectory / camera / YOLO settings with the cut-in scenario
 from core.carla_session import CarlaSession
 from perception.yolo_detector import YoloDetector
 from perception import scene_logger
 
 
 # ══════════════════════════════════════════════════════════════════
-#  ตั้งค่า perception-logging (ปรับได้ — แยกจาก config ฉาก AEB)
+#  Perception-logging settings (tunable — separate from AEB scenario config)
 # ══════════════════════════════════════════════════════════════════
-# pass ที่จะรัน: "background" = ฉาก 3DGS ล้วน (ไม่มีรถ),
-#               "with_actor" = + รถเป้าหมาย (dart) แทรกเข้าไป (เทียบกับ background)
+# passes to run: "background" = pure 3DGS scene (no vehicle),
+#               "with_actor" = + target vehicle (dart) inserted (compared against background)
 PERCEP_PASSES = ["background", "with_actor"]
 
-# โหมด sampling: ถ้า _M > 0 → สุ่มทุก ๆ M เมตรของระยะวิ่ง; ไม่งั้นใช้ทุก ๆ N เฟรม
-PERCEP_SAMPLE_EVERY_M      = 1.0     # เมตร
-PERCEP_SAMPLE_EVERY_FRAMES = 5       # ใช้เมื่อ PERCEP_SAMPLE_EVERY_M <= 0
+# sampling mode: if _M > 0 → sample every M metres of travel distance; otherwise sample every N frames
+PERCEP_SAMPLE_EVERY_M      = 1.0     # metres
+PERCEP_SAMPLE_EVERY_FRAMES = 5       # used when PERCEP_SAMPLE_EVERY_M <= 0
 
-PERCEP_DRIVE_KMH = 30.0              # ความเร็วเลื่อนกล้อง (ไม่กระทบตำแหน่งที่ sample แบบเมตร)
+PERCEP_DRIVE_KMH = 30.0              # camera drive speed (does not affect sample positions in metre mode)
 PERCEP_SETTLE_TICKS = 20
 
-# เปิดหน้าต่าง OpenCV ดู detection สด ๆ (วาดบนเฟรมที่ sample = ตรงกับที่ log); 'q' = หยุด
-# ตั้ง False เพื่อรัน headless (เซิร์ฟเวอร์ไม่มีจอ/ไม่ได้ติดตั้ง cv2)
+# open an OpenCV window to view live detections (drawn on sampled frames = matches logged frames); 'q' = quit
+# set to False to run headless (server without display / cv2 not installed)
 PERCEP_SHOW_WINDOW = True
 
-RESULTS_DIR = cfg.RESULTS_DIR        # เขียนที่ results/perception_log_*.csv (แยกจาก matrix_*)
+RESULTS_DIR = cfg.RESULTS_DIR        # writes to results/perception_log_*.csv (separate from matrix_*)
 
 
 def _summary_per_class(per_class):
-    """คืน dict {class_name: {count, mean_conf, median_conf, min_conf, max_conf}}"""
+    """Return a dict {class_name: {count, mean_conf, median_conf, min_conf, max_conf}}"""
     out = {}
     for name, confs in sorted(per_class.items()):
         out[name] = dict(
@@ -70,7 +70,7 @@ def main():
 
     viz = None
     if PERCEP_SHOW_WINDOW:
-        from perception.percep_viz import PercepViz   # import cv2 เฉพาะตอนเปิดหน้าต่าง
+        from perception.percep_viz import PercepViz   # import cv2 only when the display window is enabled
         viz = PercepViz(cfg)
 
     all_rows = []
@@ -93,7 +93,7 @@ def main():
         if viz is not None:
             viz.close()
 
-    # ── เขียน CSV (1 แถว/1 detection) ──
+    # ── write CSV (1 row per detection) ──
     os.makedirs(RESULTS_DIR, exist_ok=True)
     stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     csv_path = os.path.join(RESULTS_DIR, f"perception_log_{stamp}.csv")
@@ -106,9 +106,9 @@ def main():
         w.writeheader()
         for r in all_rows:
             w.writerow(r)
-    print(f"\n[CSV] เขียน {len(all_rows)} detection rows ที่ {csv_path}")
+    print(f"\n[CSV] wrote {len(all_rows)} detection rows to {csv_path}")
 
-    # ── สรุป + sidecar ──
+    # ── summary + sidecar ──
     class_names = {cid: detector._class_name(cid) for cid in cfg.TARGET_CLASSES}
     meta = dict(
         generated=stamp,
@@ -137,7 +137,7 @@ def main():
     )
 
     print("\n" + "=" * 64)
-    print("สรุป perception-logging (raw detections + confidence ดิบ ไม่ใช่ accuracy)")
+    print("Perception-logging summary (raw detections + raw confidence — NOT accuracy)")
     for st in pass_stats:
         per_cls = _summary_per_class(st["per_class"])
         meta["passes"].append(dict(
@@ -148,20 +148,20 @@ def main():
         ))
         print("-" * 64)
         print(f"pass = {st['pass_type']}")
-        print(f"  เฟรมที่ sample = {st['n_frames_sampled']} | detections รวม = {st['n_detections']}")
+        print(f"  sampled frames = {st['n_frames_sampled']} | total detections = {st['n_detections']}")
         if per_cls:
             print(f"  {'class':<16}{'count':>7}{'mean':>9}{'median':>9}{'min':>8}{'max':>8}")
             for name, s in per_cls.items():
                 print(f"  {name:<16}{s['count']:>7}{s['mean_conf']:>9.3f}"
                       f"{s['median_conf']:>9.3f}{s['min_conf']:>8.3f}{s['max_conf']:>8.3f}")
         else:
-            print("  (ไม่มี detection)")
+            print("  (no detections)")
     print("=" * 64)
 
     meta_path = csv_path.rsplit(".", 1)[0] + ".meta.json"
     with open(meta_path, "w", encoding="utf-8") as f:
         json.dump(meta, f, ensure_ascii=False, indent=2)
-    print(f"[META] เขียน sidecar (conf threshold/ความละเอียด/สรุปต่อคลาส) ที่ {meta_path}")
+    print(f"[META] wrote sidecar (conf threshold / resolution / per-class summary) to {meta_path}")
 
 
 if __name__ == "__main__":

@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """
-ไล่ TEST MATRIX ทั้งหมด (headless ไม่มีภาพ) สำหรับแต่ละสมองกลใน MATRIX_RUNS
-แล้วเขียน CSV + สรุป R_c เทียบกัน → เช็กว่าได้เป้า +20% (成果2) ไหม
-วิธีใช้:  python run_matrix.py
+Run the full TEST MATRIX (headless, no display) for each controller in MATRIX_RUNS,
+write CSV + summarize R_c comparisons → check whether the +20% target (成果2) is met.
+Usage:  python run_matrix.py
 """
 import sys, os, itertools, datetime
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -31,32 +31,32 @@ def main():
         cfg.TARGET_CLASSES, cfg.VEHICLE_CLS, cfg.LANE_LEFT, cfg.LANE_RIGHT, cfg.MIN_BOX_H,
     )
     cases = build_cases()
-    print(f"[MATRIX] {len(cases)} เคส/สมองกล × {len(matrix_runs)} runs "
-          f"= {len(cases)*len(matrix_runs)} รัน  TEST_MODE={test_mode}")
+    print(f"[MATRIX] {len(cases)} cases/controller × {len(matrix_runs)} runs "
+          f"= {len(cases)*len(matrix_runs)} total runs  TEST_MODE={test_mode}")
 
     records = []
     with CarlaSession(cfg.HOST, cfg.PORT, cfg.TIMEOUT, cfg.FIXED_DT) as sess:
         for run in matrix_runs:
             for i, case in enumerate(cases):
-                print(f"\n--- [{run['label']}] เคส {i+1}/{len(cases)} {case} ---")
+                print(f"\n--- [{run['label']}] case {i+1}/{len(cases)} {case} ---")
                 rec, _ = run_case(sess, cfg, case, run["controller"],
                                   run.get("delay_frames", 0), detector,
                                   run_spec=run, case_idx=i, test_mode=test_mode, viz=None)
                 rec.label = run["label"]
                 records.append(rec)
 
-    # ── เขียน CSV ──
+    # ── write CSV ──
     stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     # embed TEST_MODE in the filename so each result file states what it tested
     # (e.g. matrix_original_*.csv, matrix_latency_comp_all_*.csv); timestamp keeps it unique
     csv_path = os.path.join(cfg.RESULTS_DIR, f"matrix_{test_mode}_{stamp}.csv")
     write_csv(records, csv_path)
-    print(f"\n[CSV] เขียนผลที่ {csv_path}")
+    print(f"\n[CSV] Results written to {csv_path}")
 
-    # ── สรุป + เช็ก 20% ──
+    # ── summarize + check 20% ──
     summary = summarize(records)
     print("\n" + "=" * 72)
-    print("สรุปต่อสมองกล (ฉาก cut-in):")
+    print("Summary per controller (cut-in scenario):")
     labels = [r["label"] for r in matrix_runs]
     for label in labels:
         if label not in summary:
@@ -76,8 +76,8 @@ def main():
             if prop not in summary:
                 continue
             delta = (summary[prop]["rc"] - summary[base]["rc"]) * 100
-            status = "✓ ผ่าน" if delta >= 20 else "✗ ยังไม่ถึง — จูน DYN_K_* / REQ_*_FRAC หรือ DELAY_FRAMES"
-            print(f"Δ Rc ({prop} − {base}) = {delta:+.1f}%  | เป้า +20%: {status}")
+            status = "✓ pass" if delta >= 20 else "✗ not yet — tune DYN_K_* / REQ_*_FRAC or DELAY_FRAMES"
+            print(f"Δ Rc ({prop} − {base}) = {delta:+.1f}%  | target +20%: {status}")
     print("=" * 72)
     print(f"[TEST_MODE={test_mode}]  CSV: {csv_path}")
 

@@ -67,8 +67,8 @@ class PerceptionPredictor:
         out.lead_speed = max(0.0, perc.lead_speed - lead_decel * L)
         out.distance = max(0.0, perc.distance - v_close * L - 0.5 * lead_decel * L * L)
         # rel_pred = v_close + lead_decel * L                      # closing speed at t=L
-        # closing-speed gain = ความเร็วที่เป้าเสียไปจริง (cap ที่การหยุดสนิท)
-        dv_close = perc.lead_speed - out.lead_speed   # = min(lead_decel*L, lead_speed) เสมอ ไม่ overshoot
+        # closing-speed gain = actual speed lost by the lead (capped at full stop)
+        dv_close = perc.lead_speed - out.lead_speed   # = min(lead_decel*L, lead_speed) always — no overshoot
         rel_pred = v_close + dv_close
         
         out.rel_speed = rel_pred

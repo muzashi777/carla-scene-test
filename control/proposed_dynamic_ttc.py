@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
 """
-สมองกล proposed — Dynamic TTC: ปรับ threshold ตามความเร็ว + ความลื่นถนน
-  เร็วขึ้น หรือ ลื่นขึ้น  → ยก threshold ให้สูงขึ้น → เบรกล่วงหน้าเร็วขึ้น → ระยะหยุดพอ
+Proposed controller — Dynamic TTC: adjusts thresholds based on speed + road friction
+  Higher speed or lower friction → raises the threshold → brakes earlier → sufficient stopping distance
   thr_full = TTC_BRAKE_FULL + K_SPEED*max(0,(v-V0)/100) + K_MU*max(0,(MU0-mu))
-นี่คือกลยุทธ์ที่ Master Plan แนะนำ ("if speed>50 and friction==0.40: trigger_brake_TTC=1.2")
-แต่ทำเป็นต่อเนื่องเพื่อให้ปรับได้นุ่มนวลและจูนง่าย
+This is the strategy recommended by the Master Plan ("if speed>50 and friction==0.40: trigger_brake_TTC=1.2")
+but implemented continuously for smoother adaptation and easier tuning
 """
 from control.base_controller import BaseController, register
 
