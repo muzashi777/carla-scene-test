@@ -1000,4 +1000,100 @@ python3 tests/test_latency_comp_all.py   # L=0 identity, enhanced_predictive con
 
 ---
 
-*This document was generated from: `CODE_CHANGES.md`, `REVIEW.md`, `docs/brake_timing_params.md`, `review_yolo_tablev.md`, `CHANGES_degradation.md`, `CHANGES_latency_compensation.md`, and `CHANGES_latency_comp_all.md`. Last updated: 2026-07-11.*
+### Rev 2026-07-22 — CCRs + Cut-out scenarios on train000
+
+Added two new test scenarios running on the `train000` 3DGS scene. All existing `scene03_2` scenarios (`cut-in`, `lead-brake`) are byte-for-byte unchanged.
+
+#### New files
+
+| File | Purpose |
+|---|---|
+| `config/scenario_ccrs.py` | CCRs config: EGO/TARGET spawns, EXPECTED_SCENE, SPECTATOR_TF, 5×2=10 matrix |
+| `config/scenario_cutout.py` | Cut-out config: EGO/TARGET/LEAD spawns, cut-out constants, 5×5×2=50 matrix |
+| `core/scenario_ccrs.py` | `CCRsScenario`: target always stationary (`hold()`) |
+| `core/scenario_cutout.py` | `CutOutScenario`: lead cruises → cuts right when ≤ `CUTOUT_TRIGGER_D` from target |
+| `core/runner_ccrs.py` | `CCRsRecord` + `run_case()` for CCRs |
+| `core/runner_cutout.py` | `CutOutRecord` + `run_case()` for Cut-out |
+| `run_single_ccrs.py` | Entry point: 1 CCRs case with display |
+| `run_matrix_ccrs.py` | Entry point: CCRs matrix → `results/ccrs_matrix_*.csv` |
+| `run_single_cutout.py` | Entry point: 1 cut-out case with display |
+| `run_matrix_cutout.py` | Entry point: cut-out matrix → `results/cutout_matrix_*.csv` |
+
+#### Modified files (additive only — no existing code paths changed)
+
+| File | Change |
+|---|---|
+| `core/actors.py` | Added `set_spectator()` and `check_scene()` helpers at end of file |
+| `core/conflict.py` | Added `_kinematic_conflict_stationary_target()`, `ccrs_is_conflict()`, `cutout_is_conflict()` |
+| `config/scenario_cutin.py` | Added `EXPECTED_SCENE = "scene03_2"`, `SPECTATOR_TF = dict(...)` |
+| `config/scenario_lead_brake.py` | Same additions |
+| `run_single.py` | Added `actors.check_scene()` + `actors.set_spectator()` after session open |
+| `run_matrix.py` | Same + `MATRIX_VIZ=1` opt-in viz (default=None, existing behaviour unchanged) |
+| `run_single_lead.py` | Added `check_scene` + `set_spectator` |
+| `run_matrix_lead.py` | Same + `MATRIX_VIZ` opt-in viz |
+| `tools/check_conflict.py` | Added `check_ccrs()` + `check_cutout()` sections |
+| `README.md` | Added new scenarios, run commands, matrix tables, spectator, scene check, viz docs |
+| `TECHNICAL_DOC.md` | This entry |
+
+#### Conflict formula (train000)
+
+Both CCRs and Cut-out use the stationary-target formula (conflict against unbraked ego):
+
+```
+dist         = hypot(EGO_SPAWN.x − TARGET_SPAWN.x, EGO_SPAWN.y − TARGET_SPAWN.y) ≈ 49.2 m
+surface_gap  = dist − GAP_OFFSET                                                  ≈ 44.7 m
+t_conflict   = surface_gap / v_ego
+is_conflict  = t_conflict ≤ MAX_TICKS × FIXED_DT (20 s)
+```
+
+All 10 CCRs and all 50 cut-out matrix cases are conflict cases (worst: 20 km/h → t ≈ 8.0 s < 20 s).
+
+#### Geometry generalisation (forward-vector lead spawn)
+
+The existing axis-aligned formula `lead_y = EGO_SPAWN.y − headway_d` is the `yaw=−90°` special case of the general formula used in `runner_cutout.py`:
+
+```python
+yaw_rad = math.radians(cfg.EGO_SPAWN["yaw"])
+lead_x  = cfg.EGO_SPAWN["x"] + headway_d * math.cos(yaw_rad)
+lead_y  = cfg.EGO_SPAWN["y"] + headway_d * math.sin(yaw_rad)
+```
+
+Verification: yaw=−90° → cos=0, sin=−1 → lead_x=EGO.x, lead_y=EGO.y−headway_d ✓ (matches existing code).
+
+#### End-of-run condition (direction-agnostic)
+
+Replaces the axis-aligned `ego_y < END_Y` guard used in scene03_2:
+
+```python
+dist_from_start = math.hypot(ego.x − ego_x0, ego.y − ego_y0)
+if dist_from_start > initial_ego_target_dist + 15.0:
+    result_txt = "NO BRAKE / passed"; break
+```
+
+Computed from actual spawn coordinates — no manual tuning when coordinates change.
+
+#### Configurable viz in matrix runners
+
+```python
+viz_enabled = os.environ.get("MATRIX_VIZ", "0") == "1"
+viz = Viz(cfg) if viz_enabled else None
+```
+
+Default = `"0"` → `viz=None` (identical to all prior matrix runs). Enable: `MATRIX_VIZ=1 python run_matrix*.py`.
+
+#### Existing behaviour guarantee
+
+- `core/conflict.py` existing functions: `cutin_is_conflict()`, `lead_brake_is_conflict()` — unchanged.
+- All `scene03_2` runner/config/scenario files: byte-for-byte identical to previous revision.
+- `EXPECTED_SCENE = ""` would skip the check (no-op); the actual values set are `"scene03_2"` / `"train000"`, so the guard fires only if the wrong map is loaded.
+
+#### How to verify (no CARLA)
+
+```bash
+python3 tools/check_conflict.py        # 160/160 conflict — all 4 scenarios
+python3 -m py_compile core/runner_ccrs.py core/runner_cutout.py  # syntax check
+```
+
+---
+
+*This document was generated from: `CODE_CHANGES.md`, `REVIEW.md`, `docs/brake_timing_params.md`, `review_yolo_tablev.md`, `CHANGES_degradation.md`, `CHANGES_latency_compensation.md`, `CHANGES_latency_comp_all.md`. Last updated: 2026-07-22.*

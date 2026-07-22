@@ -8,9 +8,11 @@ import sys, os, itertools, datetime
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import config.scenario_cutin as cfg
+from core import actors
 from core.carla_session import CarlaSession
 from core.runner import run_case
 from core.metrics import write_csv, summarize
+from core.viz import Viz
 from perception.yolo_detector import YoloDetector
 
 
@@ -31,19 +33,26 @@ def main():
         cfg.TARGET_CLASSES, cfg.VEHICLE_CLS, cfg.LANE_LEFT, cfg.LANE_RIGHT, cfg.MIN_BOX_H,
     )
     cases = build_cases()
+    viz_enabled = os.environ.get("MATRIX_VIZ", "0") == "1"
     print(f"[MATRIX] {len(cases)} cases/controller × {len(matrix_runs)} runs "
-          f"= {len(cases)*len(matrix_runs)} total runs  TEST_MODE={test_mode}")
+          f"= {len(cases)*len(matrix_runs)} total runs  TEST_MODE={test_mode}"
+          f"  MATRIX_VIZ={'on' if viz_enabled else 'off'}")
 
     records = []
     with CarlaSession(cfg.HOST, cfg.PORT, cfg.TIMEOUT, cfg.FIXED_DT) as sess:
+        actors.check_scene(sess.world, cfg.EXPECTED_SCENE)
+        actors.set_spectator(sess.world, cfg.SPECTATOR_TF)
+        viz = Viz(cfg) if viz_enabled else None
         for run in matrix_runs:
             for i, case in enumerate(cases):
                 print(f"\n--- [{run['label']}] case {i+1}/{len(cases)} {case} ---")
                 rec, _ = run_case(sess, cfg, case, run["controller"],
                                   run.get("delay_frames", 0), detector,
-                                  run_spec=run, case_idx=i, test_mode=test_mode, viz=None)
+                                  run_spec=run, case_idx=i, test_mode=test_mode, viz=viz)
                 rec.label = run["label"]
                 records.append(rec)
+        if viz is not None:
+            viz.close()
 
     # ── write CSV ──
     stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")

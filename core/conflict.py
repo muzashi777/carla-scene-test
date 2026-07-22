@@ -167,6 +167,87 @@ def lead_brake_is_conflict(case: dict, cfg) -> bool:
     )
 
 
+# ── Stationary-target conflict formula (CCRs and Cut-out) ──────────────────────
+
+def _kinematic_conflict_stationary_target(
+    ego_speed_kmh: float,
+    ego_spawn_x: float,
+    ego_spawn_y: float,
+    target_spawn_x: float,
+    target_spawn_y: float,
+    gap_offset_m: float,
+    max_ticks: int,
+    fixed_dt: float,
+) -> bool:
+    """
+    Determines whether an unbraked ego (constant speed v_e) collides with a
+    STATIONARY target within max_ticks × fixed_dt seconds.
+
+    The target never moves.  Time to collision = surface_gap / v_e, where:
+      surface_gap = max(0, centre_to_centre_distance − gap_offset_m)
+
+    gap_offset_m is an approximation of the vehicle extents sum (ego half-length +
+    target half-length) used only for the pre-simulation check; the runner computes
+    it exactly from bounding boxes at runtime.  The approximation is conservative
+    and only delays t_conflict by gap_offset_m / v_e (≤ ~0.5 s at 60 km/h),
+    well within the 20 s window.
+
+    Used by both CCRs (always stationary target) and Cut-out (conflict measured
+    against the revealed stationary target, not the cutting-out lead).
+    """
+    v_e = ego_speed_kmh / 3.6
+    if v_e < 1e-3:
+        return False
+    dist = math.hypot(ego_spawn_x - target_spawn_x, ego_spawn_y - target_spawn_y)
+    surface_gap = max(0.0, dist - gap_offset_m)
+    if surface_gap <= 0.0:
+        return True   # already overlapping — definitely a conflict
+    t_conflict = surface_gap / v_e
+    return t_conflict <= max_ticks * fixed_dt
+
+
+def ccrs_is_conflict(case: dict, cfg) -> bool:
+    """
+    Return True if this CCRs matrix case is a conflict case.
+
+    The target is stationary from the start at cfg.TARGET_SPAWN.
+    'case' must contain 'ego_speed_kmh'.
+    Uses cfg.EGO_SPAWN, cfg.TARGET_SPAWN, cfg.GAP_OFFSET, cfg.MAX_TICKS, cfg.FIXED_DT.
+    """
+    return _kinematic_conflict_stationary_target(
+        ego_speed_kmh=case["ego_speed_kmh"],
+        ego_spawn_x=cfg.EGO_SPAWN["x"],
+        ego_spawn_y=cfg.EGO_SPAWN["y"],
+        target_spawn_x=cfg.TARGET_SPAWN["x"],
+        target_spawn_y=cfg.TARGET_SPAWN["y"],
+        gap_offset_m=cfg.GAP_OFFSET,
+        max_ticks=cfg.MAX_TICKS,
+        fixed_dt=cfg.FIXED_DT,
+    )
+
+
+def cutout_is_conflict(case: dict, cfg) -> bool:
+    """
+    Return True if this Cut-out matrix case is a conflict case.
+
+    Conflict is defined against the STATIONARY revealed target (not the lead
+    that cuts out — the lead is not a collision object for the AEB test).
+    Ego at constant speed would collide with the stationary target within window.
+    'case' must contain 'ego_speed_kmh'.
+    Uses cfg.EGO_SPAWN, cfg.TARGET_SPAWN, cfg.GAP_OFFSET, cfg.MAX_TICKS, cfg.FIXED_DT.
+    """
+    return _kinematic_conflict_stationary_target(
+        ego_speed_kmh=case["ego_speed_kmh"],
+        ego_spawn_x=cfg.EGO_SPAWN["x"],
+        ego_spawn_y=cfg.EGO_SPAWN["y"],
+        target_spawn_x=cfg.TARGET_SPAWN["x"],
+        target_spawn_y=cfg.TARGET_SPAWN["y"],
+        gap_offset_m=cfg.GAP_OFFSET,
+        max_ticks=cfg.MAX_TICKS,
+        fixed_dt=cfg.FIXED_DT,
+    )
+
+
 def cutin_is_conflict(case: dict, cfg) -> bool:
     """
     Return True if this cut-in matrix case is a conflict case.

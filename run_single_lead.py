@@ -9,6 +9,7 @@ import sys, os
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import config.scenario_lead_brake as cfg
+from core import actors
 from core.carla_session import CarlaSession
 from core.runner_lead_brake import run_case
 from core.viz import Viz
@@ -23,6 +24,8 @@ def main():
     viz = Viz(cfg) if cfg.SHOW_WINDOW else None
 
     with CarlaSession(cfg.HOST, cfg.PORT, cfg.TIMEOUT, cfg.FIXED_DT) as sess:
+        actors.check_scene(sess.world, cfg.EXPECTED_SCENE)
+        actors.set_spectator(sess.world, cfg.SPECTATOR_TF)
         print(f"[SIM] sync ON dt={cfg.FIXED_DT}s | controller={cfg.SINGLE_CONTROLLER} "
               f"delay={cfg.SINGLE_DELAY_FRAMES}f | scene=lead-brake")
         rec, viz_out = run_case(

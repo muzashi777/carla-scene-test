@@ -215,3 +215,53 @@ def attach_collision_sensor(world, parent, on_hit):
     sensor = world.spawn_actor(bp, carla.Transform(), attach_to=parent)
     sensor.listen(on_hit)
     return sensor
+
+
+def set_spectator(world, tf_dict):
+    """Position the CARLA spectator camera (cosmetic only — no effect on simulation results).
+
+    tf_dict keys: x, y, z (location, metres), pitch, yaw, roll (rotation, degrees).
+    Call after CarlaSession.__enter__ and before the test loop.  If tf_dict is None
+    or empty the function is a no-op, so passing cfg.SPECTATOR_TF = None is safe.
+    """
+    if not tf_dict:
+        return
+    spectator = world.get_spectator()
+    loc = carla.Location(
+        x=float(tf_dict.get("x", 0.0)),
+        y=float(tf_dict.get("y", 0.0)),
+        z=float(tf_dict.get("z", 0.0)),
+    )
+    rot = carla.Rotation(
+        pitch=float(tf_dict.get("pitch", 0.0)),
+        yaw=float(tf_dict.get("yaw", 0.0)),
+        roll=float(tf_dict.get("roll", 0.0)),
+    )
+    spectator.set_transform(carla.Transform(loc, rot))
+    print(f"[SPECTATOR] Camera set to loc=({loc.x:.2f},{loc.y:.2f},{loc.z:.2f}) "
+          f"yaw={rot.yaw:.1f}°")
+
+
+def check_scene(world, expected_scene):
+    """Verify the currently-loaded CARLA map matches the expected scene name.
+
+    Uses a substring check: if 'expected_scene' appears anywhere in the full map
+    path returned by world.get_map().name the check passes.  This handles both
+    short names ('scene03_2') and full UE paths ('/Game/Maps/scene03_2').
+
+    Raises RuntimeError immediately with a clear message if the map does not match,
+    so the tester does not waste time running the wrong scene.
+
+    If expected_scene is empty or None the check is skipped (opt-in).
+    """
+    if not expected_scene:
+        return
+    actual = world.get_map().name
+    if expected_scene not in actual:
+        raise RuntimeError(
+            f"\n[SCENE CHECK] Wrong scene loaded!\n"
+            f"  Expected (substring): '{expected_scene}'\n"
+            f"  Loaded map name:      '{actual}'\n"
+            f"  Load the correct scene in CARLA and restart."
+        )
+    print(f"[SCENE CHECK] OK — '{actual}' contains '{expected_scene}'")

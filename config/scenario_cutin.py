@@ -22,6 +22,13 @@ STOP_KMH  = 0.6           # below this speed the vehicle is considered fully sto
 END_Y     = -56.0         # ego past this point = passed the intersection without braking
 GRAVITY   = 9.81
 
+# ── Scene-name check (Section 5b) ─────────────────────────────────
+# world.get_map().name must contain this substring; set "" to skip.
+EXPECTED_SCENE = "scene03_2"
+
+# ── Spectator camera for scene03_2 (cosmetic, no effect on recorded results) ──
+SPECTATOR_TF = dict(x=2.07, y=-0.69, z=1.87, yaw=-91.22)
+
 # ── Vehicle Positions (world coordinates, from scene03 prototype) ─────────────────────────
 EGO_SPAWN  = dict(x=3.02, y=-8.70, z=1.15, yaw=-90)            # ego starts here, driving in the -Y direction
 DART_SPAWN = dict(x=11.0, y=-51.5, z=0.8,  yaw=180,            # dart vehicle starts parked at the side

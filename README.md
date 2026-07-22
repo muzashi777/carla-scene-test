@@ -1,6 +1,6 @@
 # AEB Test Harness — 3DGS + UE5.5 → CARLA
 
-A simulation test harness for Automatic Emergency Braking (AEB) controllers, built for a 3D Gaussian Splatting scene imported into CARLA via UE5.5. Supports two independent test scenarios with three swappable controllers. Results are reported in the ICARCV 2026 paper *"A Real-to-Simulation Workflow for AEB Controller Testing Using 3D Gaussian Splatting in CARLA"*.
+A simulation test harness for Automatic Emergency Braking (AEB) controllers, built for a 3D Gaussian Splatting scene imported into CARLA via UE5.5. Supports four independent test scenarios with three swappable controllers. Results are reported in the ICARCV 2026 paper *"A Real-to-Simulation Workflow for AEB Controller Testing Using 3D Gaussian Splatting in CARLA"*.
 
 **Paper results:** cut-in `Rc_conflict` 44.0% → 72.0%; lead-brake 34.0% → 68.0% (baseline → proposed_enhanced).
 
@@ -8,12 +8,18 @@ A simulation test harness for Automatic Emergency Braking (AEB) controllers, bui
 
 ## Scenarios
 
-| Scenario | Description | Entry point |
-|---|---|---|
-| **Cut-in / Dart-out** | A dart vehicle launches laterally from the roadside and stops blocking the ego lane. | `run_single.py` / `run_matrix.py` |
-| **Lead-brake (CCRb)** | A lead vehicle ahead in the same lane (matching ego speed) brakes suddenly to a stop. Euro-NCAP CCRb. | `run_single_lead.py` / `run_matrix_lead.py` |
+| Scenario | Scene | Description | Entry point |
+|---|---|---|---|
+| **Cut-in / Dart-out** | scene03_2 | A dart vehicle launches laterally from the roadside and stops blocking the ego lane. | `run_single.py` / `run_matrix.py` |
+| **Lead-brake (CCRb)** | scene03_2 | A lead vehicle ahead in the same lane (matching ego speed) brakes suddenly to a stop. Euro-NCAP CCRb. | `run_single_lead.py` / `run_matrix_lead.py` |
+| **CCRs** | train000 | Ego drives toward a stationary target vehicle. Euro-NCAP CCRs style. | `run_single_ccrs.py` / `run_matrix_ccrs.py` |
+| **Cut-out** | train000 | A lead vehicle occludes a stationary target, then cuts out to the right revealing it. | `run_single_cutout.py` / `run_matrix_cutout.py` |
 
-Both scenarios share the same session, actors, controllers, YOLO, metrics, and viz infrastructure.
+All scenarios share the same session, actors, controllers, YOLO, metrics, and viz infrastructure.
+
+**Before running scene03_2 scenarios:** load the `scene03_2` map in CARLA.  
+**Before running train000 scenarios:** load the `train000` map in CARLA.  
+The scene-name check will raise a `RuntimeError` with a clear message if the wrong map is loaded.
 
 ---
 
@@ -21,20 +27,27 @@ Both scenarios share the same session, actors, controllers, YOLO, metrics, and v
 
 ```
 config/
-  scenario_cutin.py        ★ All parameters for cut-in (scene, YOLO, μ, matrix, controllers)
-  scenario_lead_brake.py   ★ All parameters for lead-brake (same structure, different values)
+  scenario_cutin.py        ★ All parameters for cut-in (scene03_2, YOLO, μ, matrix, controllers)
+  scenario_lead_brake.py   ★ All parameters for lead-brake (scene03_2; same structure)
+  scenario_ccrs.py         ★ All parameters for CCRs (train000; 5×2=10 cases/controller)
+  scenario_cutout.py       ★ All parameters for cut-out (train000; 5×5×2=50 cases/controller)
 core/
   carla_session.py         Open/close sync mode, restore original settings
-  actors.py                Spawn vehicles, set tire friction μ, attach sensors
+  actors.py                Spawn vehicles, set tire friction μ, attach sensors;
+                           + set_spectator() / check_scene() helpers
   types.py                 Perception / EgoState dataclasses (controller input)
   metrics.py               RunRecord, 5 CPEIM indices, CSV writer, summarize()
-  conflict.py              ★ Kinematic is_conflict (pre-sim, no CARLA needed)
+  conflict.py              ★ Kinematic is_conflict for all 4 scenarios (no CARLA needed)
   report.py                ★ Read CSV → print CPEIM table (standalone, no CARLA)
   viz.py                   OpenCV overlay (run_single* only)
   scenario_cutin.py        Cut-in scene logic (ego cruise, dart trigger, blocking stop)
   runner.py                Single-case runner for cut-in (returns RunRecord)
   scenario_lead_brake.py   Lead-brake scene logic
   runner_lead_brake.py     Single-case runner for lead-brake (returns LeadBrakeRecord)
+  scenario_ccrs.py         CCRs scene logic (target always stationary; ego cruises)
+  runner_ccrs.py           Single-case runner for CCRs (returns CCRsRecord)
+  scenario_cutout.py       Cut-out scene logic (lead cuts right after CUTOUT_TRIGGER_D)
+  runner_cutout.py         Single-case runner for cut-out (returns CutOutRecord)
 control/
   base_controller.py       ★ Plugin interface: throttle/brake/steer (BaseController)
   baseline_static_ttc.py   @register("baseline")          — Static TTC
@@ -45,11 +58,15 @@ perception/
   scene_logger.py          Perception log runner (background + with-actor passes)
   percep_viz.py            Visualisation helper for perception logs
 tools/
-  check_conflict.py        ★ Verify is_conflict for every matrix case (no CARLA needed)
+  check_conflict.py        ★ Verify is_conflict for all 4 scenario matrices (no CARLA needed)
 run_single.py              Cut-in: run 1 case with OpenCV display
 run_matrix.py              Cut-in: sweep full matrix → results/matrix_*.csv
 run_single_lead.py         Lead-brake: run 1 case with display
 run_matrix_lead.py         Lead-brake: sweep full matrix → results/lead_matrix_*.csv
+run_single_ccrs.py         CCRs: run 1 case with display  [train000]
+run_matrix_ccrs.py         CCRs: sweep full matrix → results/ccrs_matrix_*.csv  [train000]
+run_single_cutout.py       Cut-out: run 1 case with display  [train000]
+run_matrix_cutout.py       Cut-out: sweep full matrix → results/cutout_matrix_*.csv  [train000]
 run_perception_log.py      Run YOLO perception logging (background + actor passes)
 ```
 
@@ -69,28 +86,62 @@ run_perception_log.py      Run YOLO perception logging (background + actor passe
 ```bash
 python tools/check_conflict.py
 LEAD_DECEL=6.0 python tools/check_conflict.py   # verify with paper deceleration
+# Checks all 4 scenarios: cut-in (50), lead-brake (50), CCRs (10), cut-out (50) = 160 total
 ```
 
-**Scenario 1 — Cut-in / Dart-out:**
+**Scenario 1 — Cut-in / Dart-out (scene03_2):**
 ```bash
 python run_single.py     # debug single case with display; edit SINGLE_* in config/scenario_cutin.py
 python run_matrix.py     # sweep 50 cases × 3 controllers → results/matrix_*.csv
+MATRIX_VIZ=1 python run_matrix.py   # enable display during matrix run (opt-in)
 ```
 
-**Scenario 2 — Lead-brake (CCRb):**
+**Scenario 2 — Lead-brake (CCRb, scene03_2):**
 ```bash
 python run_single_lead.py                    # debug single case with display
 LEAD_DECEL=6.0 python run_matrix_lead.py    # Euro-NCAP CCRb §3.4 — value used in paper (Table III/IV)
 python run_matrix_lead.py                    # code default LEAD_DECEL=4.0 (moderate braking)
+MATRIX_VIZ=1 python run_matrix_lead.py      # enable display during matrix run
+```
+
+**Scenario 3 — CCRs (stationary target, train000):**
+```bash
+# Load train000 in CARLA first
+python run_single_ccrs.py                # debug single case with display
+python run_matrix_ccrs.py                # sweep 10 cases × 3 controllers → results/ccrs_matrix_*.csv
+TEST_MODE=latency python run_matrix_ccrs.py
+MATRIX_VIZ=1 python run_matrix_ccrs.py  # enable display
+```
+
+**Scenario 4 — Cut-out (occluded stationary target, train000):**
+```bash
+# Load train000 in CARLA first
+python run_single_cutout.py               # debug single case with display
+python run_matrix_cutout.py               # sweep 50 cases × 3 controllers → results/cutout_matrix_*.csv
+TEST_MODE=latency python run_matrix_cutout.py
+MATRIX_VIZ=1 python run_matrix_cutout.py # enable display
 ```
 
 **Summarise results from existing CSVs (no CARLA needed):**
 ```bash
 python -m core.report results/matrix_*.csv
 python -m core.report results/lead_matrix_*.csv
+python -m core.report results/ccrs_matrix_*.csv
+python -m core.report results/cutout_matrix_*.csv
 ```
 
-> Lead-brake results are prefixed `lead_matrix_` (set by `RESULTS_PREFIX`), clearly separated from cut-in results (`matrix_`).
+> Each scenario's results are independently prefixed: `matrix_` (cut-in), `lead_matrix_` (lead-brake), `ccrs_matrix_` (CCRs), `cutout_matrix_` (cut-out).
+
+---
+
+## Spectator Camera
+
+Each scenario has a pre-tuned spectator camera pose in its config (`SPECTATOR_TF`). Every run script calls `actors.set_spectator()` immediately after session open — the camera is cosmetic only and has no effect on recorded results. To disable, set `SPECTATOR_TF = None` in the config.
+
+| Config | Camera position |
+|---|---|
+| `scenario_cutin.py` / `scenario_lead_brake.py` | x=2.07, y=−0.69, z=1.87, yaw=−91.22° |
+| `scenario_ccrs.py` / `scenario_cutout.py` | x=5.27, y=−0.18, z=0.67, yaw=−143.44° |
 
 ---
 
@@ -148,17 +199,21 @@ Sweep constants (`LATENCY_DELAY_FRAMES`, `NOISE_SIGMA_M_SWEEP`, `COMP_CONTROLLER
 
 ## Test Matrix
 
-| Scenario | Variable | Values |
-|---|---|---|
-| Cut-in | `ego_speed_kmh` | 20, 30, 40, 50, 60 km/h |
-| Cut-in | `trigger_d` (Δd) | 20, 25, 30, 35, 40 m |
-| Cut-in | `mu` | 0.85 (dry), 0.40 (wet) |
-| Cut-in | `dart_speed_kmh` | 20 km/h (fixed) |
-| Lead-brake | `ego_speed_kmh` | 20, 30, 40, 50, 60 km/h |
-| Lead-brake | `HEADWAY_THW` | 1.0, 1.5, 2.0, 2.5, 3.0 s |
-| Lead-brake | `mu` | 0.85 (dry), 0.40 (wet) |
+| Scenario | Scene | Variable | Values | Cases/ctrl |
+|---|---|---|---|---|
+| Cut-in | scene03_2 | `ego_speed_kmh` | 20, 30, 40, 50, 60 km/h | 50 |
+| Cut-in | scene03_2 | `trigger_d` (Δd) | 20, 25, 30, 35, 40 m | |
+| Cut-in | scene03_2 | `mu` | 0.85 (dry), 0.40 (wet) | |
+| Lead-brake | scene03_2 | `ego_speed_kmh` | 20, 30, 40, 50, 60 km/h | 50 |
+| Lead-brake | scene03_2 | `HEADWAY_THW` | 1.0, 1.5, 2.0, 2.5, 3.0 s | |
+| Lead-brake | scene03_2 | `mu` | 0.85 (dry), 0.40 (wet) | |
+| **CCRs** | **train000** | `ego_speed_kmh` | 20, 30, 40, 50, 60 km/h | **10** |
+| CCRs | train000 | `mu` | 0.85 (dry), 0.40 (wet) | |
+| **Cut-out** | **train000** | `ego_speed_kmh` | 20, 30, 40, 50, 60 km/h | **50** |
+| Cut-out | train000 | `headway_thw` | 1.0, 1.5, 2.0, 2.5, 3.0 s | |
+| Cut-out | train000 | `mu` | 0.85 (dry), 0.40 (wet) | |
 
-**Case count:** 50 cases/controller × 3 controllers = **150 runs per scenario**.
+**Case count:** 50 / 50 / 10 / 50 cases/controller × 3 controllers = 150 / 150 / 30 / 150 runs per scenario (= 480 total across all 4 scenarios for `TEST_MODE=original`).
 
 ---
 
@@ -220,7 +275,9 @@ No changes to scenario logic or metrics are needed. The controller works with bo
 
 Results are written to `results/`:
 - `matrix_*.csv` — cut-in runs
-- `lead_matrix_*.csv` — lead-brake runs (prefixed by `RESULTS_PREFIX`)
+- `lead_matrix_*.csv` — lead-brake runs
+- `ccrs_matrix_*.csv` — CCRs runs (train000)
+- `cutout_matrix_*.csv` — cut-out runs (train000)
 
 Key CSV columns: `label`, `controller`, `ego_speed_kmh`, `mu`, `avoided`, `s_clearance` (surface gap, m), `a_b_mfdd` (MFDD, m/s²), `t_c_warn` (TTC at brake onset, s), `dv_speed_var` (Δv, km/h), `is_conflict`, `peak_decel`, `a_max`. Latency-compensation runs add `comp_source` (`""`/`oracle`/`mismatched`) and `comp_L_frames` (the L actually used to compensate, in frames — may differ from `delay_frames` under `mismatched`). These columns default empty/0, so older CSVs still load in `report.py`.
 

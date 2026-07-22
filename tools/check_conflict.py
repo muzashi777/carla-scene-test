@@ -21,7 +21,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import config.scenario_cutin      as cfg_c
 import config.scenario_lead_brake as cfg_lb
-from core.conflict import cutin_is_conflict, lead_brake_is_conflict
+import config.scenario_ccrs       as cfg_ccrs
+import config.scenario_cutout     as cfg_co
+from core.conflict import cutin_is_conflict, lead_brake_is_conflict, ccrs_is_conflict, cutout_is_conflict
 
 
 def check_cutin():
@@ -95,24 +97,109 @@ def check_lead_brake():
     return n_conflict, n_no, n_total
 
 
+def check_ccrs():
+    speeds  = cfg_ccrs.MATRIX["ego_speed_kmh"]
+    mu_vals = cfg_ccrs.MATRIX["mu"]
+    n_total = len(speeds) * len(mu_vals)
+
+    import math as _math
+    dist = _math.hypot(cfg_ccrs.EGO_SPAWN["x"] - cfg_ccrs.TARGET_SPAWN["x"],
+                       cfg_ccrs.EGO_SPAWN["y"] - cfg_ccrs.TARGET_SPAWN["y"])
+    surface_gap = max(0.0, dist - cfg_ccrs.GAP_OFFSET)
+    max_time = cfg_ccrs.MAX_TICKS * cfg_ccrs.FIXED_DT
+
+    print("\n" + "=" * 72)
+    print("CCRs matrix conflict check  (train000)")
+    print(f"  matrix: {len(speeds)} speeds × {len(mu_vals)} μ = {n_total} cases")
+    print(f"  speeds (km/h): {speeds}")
+    print(f"  ego→target dist = {dist:.1f} m  |  GAP_OFFSET = {cfg_ccrs.GAP_OFFSET} m  "
+          f"→ surface_gap ≈ {surface_gap:.1f} m")
+    print(f"  MAX_TIME = {max_time:.0f} s  |  t_conflict(20 km/h) = {surface_gap/(20/3.6):.1f} s")
+    print()
+    print(f"  {'speed':>8} {'mu':>6}  t_conflict    conflict?")
+    print(f"  {'-'*8} {'-'*6}  {'-'*11}  ---------")
+
+    n_conflict = 0
+    for v, mu in itertools.product(speeds, mu_vals):
+        case = {"ego_speed_kmh": v, "mu": mu}
+        flag = ccrs_is_conflict(case, cfg_ccrs)
+        if flag:
+            n_conflict += 1
+        v_ms = v / 3.6
+        t = surface_gap / v_ms if v_ms > 1e-3 else float("inf")
+        mark = "✓ conflict" if flag else "✗ no-conflict"
+        print(f"  {v:>5.0f} km/h  {mu:>5.2f}  {t:>8.2f} s    {mark}")
+
+    n_no = n_total - n_conflict
+    print(f"\n  SUMMARY: {n_conflict}/{n_total} conflict,  {n_no}/{n_total} no-conflict")
+    return n_conflict, n_no, n_total
+
+
+def check_cutout():
+    speeds   = cfg_co.MATRIX["ego_speed_kmh"]
+    thw_vals = cfg_co.HEADWAY_THW
+    mu_vals  = cfg_co.MATRIX["mu"]
+    n_total  = len(speeds) * len(thw_vals) * len(mu_vals)
+
+    import math as _math
+    dist = _math.hypot(cfg_co.EGO_SPAWN["x"] - cfg_co.TARGET_SPAWN["x"],
+                       cfg_co.EGO_SPAWN["y"] - cfg_co.TARGET_SPAWN["y"])
+    surface_gap = max(0.0, dist - cfg_co.GAP_OFFSET)
+    max_time = cfg_co.MAX_TICKS * cfg_co.FIXED_DT
+
+    print("\n" + "=" * 72)
+    print("CUT-OUT matrix conflict check  (train000, conflict = ego vs stationary target)")
+    print(f"  matrix: {len(speeds)} speeds × {len(thw_vals)} THW × {len(mu_vals)} μ = {n_total} cases")
+    print(f"  speeds (km/h): {speeds}")
+    print(f"  THW (s): {thw_vals}  [lead headway — does not affect conflict formula]")
+    print(f"  ego→target dist = {dist:.1f} m  |  GAP_OFFSET = {cfg_co.GAP_OFFSET} m  "
+          f"→ surface_gap ≈ {surface_gap:.1f} m")
+    print(f"  MAX_TIME = {max_time:.0f} s")
+    print()
+    print(f"  {'speed':>8} {'THW':>6} {'mu':>6}  t_conflict    conflict?")
+    print(f"  {'-'*8} {'-'*6} {'-'*6}  {'-'*11}  ---------")
+
+    n_conflict = 0
+    for v, thw, mu in itertools.product(speeds, thw_vals, mu_vals):
+        case = {"ego_speed_kmh": v, "mu": mu}
+        flag = cutout_is_conflict(case, cfg_co)
+        if flag:
+            n_conflict += 1
+        v_ms = v / 3.6
+        t = surface_gap / v_ms if v_ms > 1e-3 else float("inf")
+        mark = "✓ conflict" if flag else "✗ no-conflict"
+        print(f"  {v:>5.0f} km/h  {thw:>5.1f}s  {mu:>5.2f}  {t:>8.2f} s    {mark}")
+
+    n_no = n_total - n_conflict
+    print(f"\n  SUMMARY: {n_conflict}/{n_total} conflict,  {n_no}/{n_total} no-conflict")
+    return n_conflict, n_no, n_total
+
+
 def main():
     print("Kinematic conflict check — no simulation required.")
     print(f"LEAD_DECEL env: {os.environ.get('LEAD_DECEL', 'not set (using default 4.0)')}")
 
-    c_conf, c_no, c_tot   = check_cutin()
-    lb_conf, lb_no, lb_tot = check_lead_brake()
+    c_conf, c_no, c_tot     = check_cutin()
+    lb_conf, lb_no, lb_tot  = check_lead_brake()
+    cc_conf, cc_no, cc_tot  = check_ccrs()
+    co_conf, co_no, co_tot  = check_cutout()
+
+    grand_conf = c_conf + lb_conf + cc_conf + co_conf
+    grand_no   = c_no   + lb_no   + cc_no   + co_no
+    grand_tot  = c_tot  + lb_tot  + cc_tot  + co_tot
 
     print("\n" + "=" * 72)
     print("GRAND TOTAL")
     print(f"  cut-in:     {c_conf}/{c_tot} conflict  ({c_no} no-conflict)")
     print(f"  lead-brake: {lb_conf}/{lb_tot} conflict  ({lb_no} no-conflict)")
-    print(f"  TOTAL:      {c_conf + lb_conf}/{c_tot + lb_tot} conflict  "
-          f"({c_no + lb_no} no-conflict)")
-    if c_no + lb_no == 0:
+    print(f"  CCRs:       {cc_conf}/{cc_tot} conflict  ({cc_no} no-conflict)")
+    print(f"  cut-out:    {co_conf}/{co_tot} conflict  ({co_no} no-conflict)")
+    print(f"  TOTAL:      {grand_conf}/{grand_tot} conflict  ({grand_no} no-conflict)")
+    if grand_no == 0:
         print("\n  All cases are conflict cases.")
-        print("  Rc_conflict = Rc_all for this LEAD_DECEL value and matrix.")
+        print("  Rc_conflict = Rc_all for these matrices.")
     else:
-        print(f"\n  {c_no + lb_no} no-conflict case(s) will be excluded from Rc_conflict.")
+        print(f"\n  {grand_no} no-conflict case(s) will be excluded from Rc_conflict.")
         print("  They are still counted in Rc_all and appear in the CSV.")
 
 
