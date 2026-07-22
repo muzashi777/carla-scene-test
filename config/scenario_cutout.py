@@ -59,15 +59,40 @@ TARGET_SPAWN = dict(x=-34.95, y=-26.28, z=0.25, yaw=-146.54,
 # Only model is specified here; position is derived at run time.
 LEAD_SPAWN = dict(z=0.79, yaw=-146.54, model="vehicle.ue4.audi.tt")
 
-# ── Cut-out behaviour (all values TO BE TUNED after visual inspection in CARLA) ──
-# The lead drives at ego speed until it is CUTOUT_TRIGGER_D metres from the target,
-# then cuts out to the right of the road at CUTOUT_LATERAL_SPEED m/s while
-# maintaining CUTOUT_FORWARD_SPEED m/s forward.  After travelling CUTOUT_TRAVEL_M
-# metres laterally, the lead stops.
-CUTOUT_TRIGGER_D    = 10.0   # m — distance lead-to-target at which cut-out begins [TO BE TUNED]
-CUTOUT_LATERAL_SPEED = 4.0   # m/s — lateral (rightward) speed during cut-out [TO BE TUNED]
-CUTOUT_FORWARD_SPEED = 0.0   # m/s — forward speed during cut-out (0 = pure lateral) [TO BE TUNED]
-CUTOUT_TRAVEL_M     = 4.0    # m — lateral distance after which lead stops [TO BE TUNED]
+# ── Cut-out physics-steering parameters (all values TO BE TUNED in CARLA) ─────
+# The lead is driven entirely under CARLA's vehicle physics (VehicleControl).
+# No set_transform / set_target_velocity is used during the manoeuvre.
+#
+# Trigger:
+CUTOUT_TRIGGER_D     = 10.0  # m — start lane-change when lead is this close to target [TO BE TUNED]
+#
+# Lateral target (when to stop steering right and begin straightening):
+CUTOUT_LANE_WIDTH    = 3.5   # m — lateral displacement (in lead's right-frame) that marks
+                              #     "successfully in the right lane" [TO BE TUNED]
+#
+# Heading offset during steer-right phase:
+CUTOUT_HEADING_DEG   = 30.0  # degrees — target yaw offset while steering right.
+                              # Positive = turns right in CARLA convention (steer > 0).
+                              # ⚠ If the lead turns LEFT, set this to -30.0. [TO BE TUNED]
+#
+# Steering P-controller:
+CUTOUT_STEER_K       = 0.05  # steer command per degree of heading error [TO BE TUNED]
+                              # Too low → sluggish / doesn't reach target lane.
+                              # Too high → oscillates / twitches.
+CUTOUT_STEER_MAX     = 0.4   # max |steer| sent to CARLA (0–1) [TO BE TUNED]
+                              # 0.4 ≈ moderate lane-change arc; increase for sharper cut-out.
+#
+# Straighten-complete threshold:
+CUTOUT_SETTLE_DEG    = 5.0   # |heading error| (°) below which the lead is considered straight [TO BE TUNED]
+#
+# Post-manoeuvre behaviour:
+CUTOUT_AFTER_STOP    = False  # False = keep cruising in right lane; True = decelerate to stop
+#
+# Longitudinal speed controller (used in all phases):
+LEAD_SPEED_K            = 0.5   # throttle/brake per m/s speed error (P-gain) [TO BE TUNED]
+                                 # Too low → drifts from target speed.
+                                 # Too high → oscillates throttle/brake.
+LEAD_SPEED_MAX_THROTTLE = 0.6   # max throttle command (0–1) [TO BE TUNED]
 
 # ── Lead headway: time-based (THW → metres) ──
 # Lead spawns at ego + headway_d along the ego forward vector.

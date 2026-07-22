@@ -256,7 +256,15 @@ def check_scene(world, expected_scene):
     """
     if not expected_scene:
         return
-    actual = world.get_map().name
+    try:
+        actual = world.get_map().name
+    except Exception as e:
+        # Scenes imported from 3DGS/UE5.5 have no OpenDRIVE road network,
+        # so get_map() raises "unable to parse the OpenDRIVE XML string".
+        # Skip the check rather than aborting — the scene name cannot be verified this way.
+        print(f"[SCENE CHECK] SKIP — world.get_map() unavailable ({e}). "
+              f"Ensure the correct scene ('{expected_scene}') is loaded in CARLA.")
+        return
     if expected_scene not in actual:
         raise RuntimeError(
             f"\n[SCENE CHECK] Wrong scene loaded!\n"

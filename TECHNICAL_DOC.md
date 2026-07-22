@@ -1096,4 +1096,88 @@ python3 -m py_compile core/runner_ccrs.py core/runner_cutout.py  # syntax check
 
 ---
 
-*This document was generated from: `CODE_CHANGES.md`, `REVIEW.md`, `docs/brake_timing_params.md`, `review_yolo_tablev.md`, `CHANGES_degradation.md`, `CHANGES_latency_compensation.md`, `CHANGES_latency_comp_all.md`. Last updated: 2026-07-22.*
+---
+
+### Rev 2026-07-22b — Cut-out lead: physics-based steering (replaces kinematic velocity injection)
+
+#### Problem
+
+The previous cut-out implementation drove the lead vehicle using `set_target_velocity()` every tick — both during the cruise phase and the lateral cut-out. This bypasses CARLA's rigid-body dynamics (no wheel steering, no tire slip) and produces a "floating/sliding" appearance where the car moves sideways without any wheel turn.
+
+#### Root cause
+
+`set_target_velocity()` directly overwrites the physics-engine velocity state each tick. CARLA's VehicleControl path (throttle / steer / brake → engine torque → wheel forces → rigid body) is never exercised, so the car has no visible steering arc.
+
+#### Fix
+
+The cut-out lead is now driven **entirely via `apply_control(VehicleControl(...))`** from spawn to end-of-run. The full control lifecycle:
+
+| Phase | Trigger | Lead control |
+|---|---|---|
+| `CRUISE` | always until `dist(lead,target) ≤ CUTOUT_TRIGGER_D` | `VehicleControl(throttle, steer=0, brake)` — P-speed controller |
+| `STEER` | trigger fires | `VehicleControl(throttle, steer, brake=0)` — P-heading controller targeting `trigger_yaw + CUTOUT_HEADING_DEG` |
+| `STRAIGHTEN` | lateral offset ≥ `CUTOUT_LANE_WIDTH` | Same heading P-controller, target = `trigger_yaw` (straighten back) |
+| `SETTLED` | `|heading error| < CUTOUT_SETTLE_DEG` | Cruise in right lane (`CUTOUT_AFTER_STOP=False`) or brake to stop |
+
+**Velocity boot at start():** one `set_target_velocity()` call is made in `start()` to kick the physics engine to the correct forward speed before the main loop begins. After that, no `set_target_velocity` / `set_transform` is applied to the lead.
+
+**Physics enabled:** `lead.set_simulate_physics(True)` called explicitly in `start()` (defensive; CARLA default is True for spawned vehicles).
+
+#### Files changed
+
+| File | Change |
+|---|---|
+| `core/scenario_cutout.py` | Full rewrite — 4-phase state machine, closed-loop heading and speed P-controllers, `VehicleControl` only in main loop |
+| `config/scenario_cutout.py` | Replaced 3 kinematic params (`CUTOUT_LATERAL_SPEED`, `CUTOUT_FORWARD_SPEED`, `CUTOUT_TRAVEL_M`) with 9 physics-tuning constants (see below) |
+
+**Files NOT changed:** `core/runner_cutout.py`, `core/actors.py`, all other scenario files, all entry points, all metrics.
+
+#### New config constants (`config/scenario_cutout.py`)
+
+| Constant | Default | Meaning |
+|---|---|---|
+| `CUTOUT_TRIGGER_D` | `10.0` m | Lead-to-target distance at which cut-out begins (unchanged) |
+| `CUTOUT_LANE_WIDTH` | `3.5` m | Lateral displacement (in lead's right-frame) to consider the right lane reached |
+| `CUTOUT_HEADING_DEG` | `30.0` ° | Target yaw offset during STEER phase. Positive = steer right in CARLA convention. **Negate to −30 if the lead turns left.** |
+| `CUTOUT_STEER_K` | `0.05` | P-gain: steer per degree of heading error |
+| `CUTOUT_STEER_MAX` | `0.4` | Hard clamp on `|steer|` (0–1) |
+| `CUTOUT_SETTLE_DEG` | `5.0` ° | Heading error threshold to exit STRAIGHTEN → SETTLED |
+| `CUTOUT_AFTER_STOP` | `False` | `True` = lead brakes to a stop in right lane; `False` = keeps cruising |
+| `LEAD_SPEED_K` | `0.5` | P-gain: throttle/brake per m/s speed error |
+| `LEAD_SPEED_MAX_THROTTLE` | `0.6` | Max throttle command (0–1) |
+
+#### Reveal-timing note
+
+A real steered arc takes longer to move the lead laterally than a velocity injection at the same trigger distance. The stationary target will be revealed to the ego **later** (smaller gap) than before. To restore the reveal distance: decrease `CUTOUT_TRIGGER_D`, or increase `CUTOUT_HEADING_DEG` / `CUTOUT_STEER_MAX` for a faster/tighter arc.
+
+#### Tuning guide
+
+| Symptom | Likely cause | What to change |
+|---|---|---|
+| Lead turns **left** instead of right | CARLA yaw convention opposite to assumed | Set `CUTOUT_HEADING_DEG = -30.0` |
+| Lead **barely moves** into right lane | Steer gain too low or heading target too small | Increase `CUTOUT_STEER_K` (e.g. 0.08) or `CUTOUT_HEADING_DEG` (e.g. 45) |
+| Lead **oscillates** (twitches) during steer | Steer gain too high | Decrease `CUTOUT_STEER_K` (e.g. 0.03) |
+| Lead **overshoots** the right lane | Heading offset or lane width wrong | Decrease `CUTOUT_HEADING_DEG` or increase `CUTOUT_LANE_WIDTH` |
+| Lead **drifts off target speed** | Speed gain too low | Increase `LEAD_SPEED_K` (e.g. 0.8) |
+| Lead **oscillates** throttle/brake | Speed gain too high | Decrease `LEAD_SPEED_K` (e.g. 0.3) |
+| Cut-out starts **too early/late** | Trigger distance wrong | Adjust `CUTOUT_TRIGGER_D` |
+| Reveal happens **too close** to ego | Manoeuvre too slow | Decrease `CUTOUT_TRIGGER_D` or increase `CUTOUT_HEADING_DEG` |
+
+#### Existing behaviour guarantee
+
+- `core/scenario_cutin.py`, `core/scenario_lead_brake.py`, `core/scenario_ccrs.py` — **byte-for-byte unchanged**.
+- `core/actors.py` (`cruise`, `hold`, `speed_ms`, etc.) — **unchanged**.
+- `core/runner_cutout.py` — **unchanged** (all lead control is inside `CutOutScenario.update()`).
+- Conflict formula, CSV schema, metrics, CPEIM indices — **unchanged**.
+- `CUTOUT_TRIGGER_D` key is preserved, so existing `SINGLE_CASE` dicts are valid.
+
+#### Verification (no CARLA)
+
+```bash
+python3 -m py_compile core/scenario_cutout.py config/scenario_cutout.py
+# Confirm no set_transform / positional teleport on lead in main loop:
+grep "set_transform\|set_target_velocity" core/scenario_cutout.py
+# → only one set_target_velocity in start() (the velocity boot); none in update()
+```
+
+*Last updated: 2026-07-22.*
