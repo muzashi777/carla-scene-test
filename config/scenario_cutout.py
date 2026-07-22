@@ -41,16 +41,16 @@ GRAVITY   = 9.81
 EXPECTED_SCENE = "train000"
 
 # ── Spectator camera for train000 ─────────────────────────────────
-SPECTATOR_TF = dict(x=5.27, y=-0.18, z=0.67, yaw=-143.44)
+SPECTATOR_TF = dict(x=5.27, y=-0.18, z=1.0, yaw=-143.44)
 
 # ── Vehicle Positions (world coordinates, train000 scene) ─────────────────
 # Ego: yaw=-146.54°; forward ≈ (-0.835, -0.550, 0) (NOT axis-aligned).
 # All "ahead" / headway distances are computed along this forward vector in the runner.
-EGO_SPAWN = dict(x=6.42,   y=0.34,   z=0.79, yaw=-146.54)
+EGO_SPAWN = dict(x=6.42,   y=0.34,   z=0.25, yaw=-146.54)
 
 # Target vehicle: stationary from t=0; same heading as ego.
 # The lead vehicle will start between ego and target and later cut out to the right.
-TARGET_SPAWN = dict(x=-34.95, y=-26.28, z=0.25, yaw=-146.54,
+TARGET_SPAWN = dict(x=-34.0, y=-26.28, z=0.25, yaw=-146.54,
                     model="vehicle.ue4.audi.tt")
 
 # Lead vehicle (the "cut-out" actor): spawned at runtime in the runner by computing
