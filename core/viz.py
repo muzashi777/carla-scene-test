@@ -68,9 +68,9 @@ class Viz:
             return
         x1, y1, x2, y2 = box
         if hazard.get("engaged"):
-            color = (0, 0, 255)          # red = braking
+            color = (0, 0, 255)          # red  = in-path AND actively braking
         else:
-            color = (0, 165, 255)        # orange = in path
+            color = (0, 200, 0)          # green = detected / tracked, not yet braking
         cv2.rectangle(frame, (x1, y1), (x2, y2), color, 3)
 
     def frame(self, frame_bgr, results, overlay_lines, img_top, hazard=None):

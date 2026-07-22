@@ -67,7 +67,7 @@ LEAD_SPAWN = dict(z=0.79, yaw=-146.54, model="vehicle.ue4.audi.tt")
 CUTOUT_TRIGGER_D     = 10.0  # m — start lane-change when lead is this close to target [TO BE TUNED]
 #
 # Lateral target (when to stop steering right and begin straightening):
-CUTOUT_LANE_WIDTH    = 3.5   # m — lateral displacement (in lead's right-frame) that marks
+CUTOUT_LANE_WIDTH    = 1.5   # m — lateral displacement (in lead's right-frame) that marks
                               #     "successfully in the right lane" [TO BE TUNED]
 #
 # Heading offset during steer-right phase:
@@ -86,7 +86,7 @@ CUTOUT_STEER_MAX     = 0.4   # max |steer| sent to CARLA (0–1) [TO BE TUNED]
 CUTOUT_SETTLE_DEG    = 5.0   # |heading error| (°) below which the lead is considered straight [TO BE TUNED]
 #
 # Post-manoeuvre behaviour:
-CUTOUT_AFTER_STOP    = False  # False = keep cruising in right lane; True = decelerate to stop
+CUTOUT_AFTER_STOP    = True  # False = keep cruising in right lane; True = decelerate to stop
 #
 # Longitudinal speed controller (used in all phases):
 LEAD_SPEED_K            = 0.5   # throttle/brake per m/s speed error (P-gain) [TO BE TUNED]
@@ -127,6 +127,26 @@ DETECTION_SOURCE = "groundtruth"
 
 INPATH_HALF_WIDTH = 1.8
 INPATH_MAX_RANGE  = 80.0   # must cover the full ego-to-target distance (~49 m)
+
+# ── Occlusion gate (cut-out only) ────────────────────────────────────────────
+# When True, the stationary target is treated as undetected while the lead
+# vehicle blocks the ego→target sight line.  Ground-truth range/TTC are still
+# used for the braking decision once the target becomes visible, keeping full
+# run-to-run repeatability.
+#
+# The gate opens (target becomes detected) when EITHER:
+#   (a) the lead has moved at least OCCLUSION_LAT_CLEAR metres laterally from
+#       the target's position in the ego frame  (lead has cut out far enough), OR
+#   (b) the lead is no longer between ego and target longitudinally
+#       (lead_lon >= target_lon - OCCLUSION_LON_MARGIN).
+#
+OCCLUSION_GATE      = True   # set False to restore the old always-detected behaviour
+OCCLUSION_LAT_CLEAR = 1.5    # m — lateral clearance before target is considered
+                              # visible.  Approx. half the lead vehicle width + margin.
+                              # [TO BE TUNED in CARLA]
+OCCLUSION_LON_MARGIN = 2.0   # m — lead is no longer "in front of" target once
+                              # it is within this distance behind target_lon.
+                              # [TO BE TUNED in CARLA]
 
 INPATH_PREDICT   = False   # target is already directly ahead; no predictive corridor needed
 INPATH_LOOKAHEAD = 0.0

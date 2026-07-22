@@ -271,6 +271,36 @@ No changes to scenario logic or metrics are needed. The controller works with bo
 
 ---
 
+## Visualisation (run_single* only)
+
+`core/viz.py` draws two layers on the front-camera feed (OpenCV window):
+
+| Layer | Colour | Condition |
+|---|---|---|
+| YOLO boxes (thin) | Green | Every object the YOLOv8n model detects, regardless of braking |
+| Hazard box (thick) | **Green** | Target is in the ego corridor (`in_path=True`) but the controller has not yet engaged braking (`brake_cmd = 0`) |
+| Hazard box (thick) | **Red** | Target is in the ego corridor **and** the controller is actively braking (`brake_cmd > 0`) |
+
+The hazard box colour is purely cosmetic — it does not affect `Perception`, the braking decision, or any CSV value.
+
+---
+
+## Cut-out Occlusion Gate
+
+In the cut-out scenario the stationary target is occluded by the lead vehicle until the lead cuts right. With `DETECTION_SOURCE="groundtruth"` the target would otherwise register as "detected" from the moment it enters `INPATH_MAX_RANGE`, even while fully blocked.
+
+The **occlusion gate** (enabled by `OCCLUSION_GATE = True` in `config/scenario_cutout.py`) suppresses detection while the lead is between ego and target. Detection is restored once the lead has moved `OCCLUSION_LAT_CLEAR` metres laterally from the target's lane position (i.e. cut out far enough). Ground-truth range/TTC are still used once the target becomes visible, keeping full run-to-run repeatability.
+
+| Config key | Default | Meaning |
+|---|---|---|
+| `OCCLUSION_GATE` | `True` | Enable the sight-line gate |
+| `OCCLUSION_LAT_CLEAR` | `1.5` m | Lateral clearance (lead − target, in ego frame) before target is visible `[TO BE TUNED]` |
+| `OCCLUSION_LON_MARGIN` | `2.0` m | Lead is no longer "in front of" target once it is within this distance behind `target_lon` `[TO BE TUNED]` |
+
+The gate is cut-out only — no other scenario is affected. The geometry helper `core/occlusion.sight_line_occluded()` has no CARLA dependency and is covered by `tests/test_occlusion_gate.py`.
+
+---
+
 ## Output
 
 Results are written to `results/`:

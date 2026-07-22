@@ -2,6 +2,7 @@
 """Actor management helpers: spawn vehicles, set wheel friction μ, attach sensors, state functions"""
 import math
 import carla
+from core.occlusion import sight_line_occluded  # noqa: F401 — re-exported for callers
 
 
 def kmh_to_ms(k):

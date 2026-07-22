@@ -1181,3 +1181,77 @@ grep "set_transform\|set_target_velocity" core/scenario_cutout.py
 ```
 
 *Last updated: 2026-07-22.*
+
+---
+
+### Rev 2026-07-22c — Detection-box colour semantics + cut-out occlusion gate
+
+#### Part A — Detection box colour (all scenarios, cosmetic only)
+
+**Problem:** the hazard box in `core/viz.py` was drawn orange when the target entered the ego corridor but braking had not started, making the display look like a hazard state even during normal cruise.
+
+**Fix:** `core/viz.py:73` — changed the non-braking hazard colour from orange `(0,165,255)` to green `(0,200,0)`. The braking colour (red `(0,0,255)`) is unchanged.
+
+| Hazard box colour | Condition |
+|---|---|
+| **Green** | Target in ego corridor (`in_path=True`); `brake_cmd = 0` |
+| **Red** | Target in ego corridor **and** controller actively braking (`brake_cmd > 0`) |
+
+This is display-only — `Perception`, the braking decision, `is_conflict`, and all CSV values are unchanged. The `hazard["engaged"]` field (= `brake_engaged` latch, set on first `ctrl.brake > 0`) already encodes the correct condition; only the colour constant changed.
+
+Affects all four runners identically since they all call the same `Viz._draw_hazard()`.
+
+#### Part B — Cut-out occlusion gate (cut-out only)
+
+**Problem:** with `DETECTION_SOURCE="groundtruth"`, `detected_now = actors.inpath_hazard(ego, target)`. This function checks only longitudinal range and lateral offset — it has no knowledge of the lead vehicle. The stationary target is directly ahead from tick 0, so `detected_now=True` before the lead has moved aside. The AEB arms while the target is still fully occluded.
+
+**Root cause:** `core/actors.inpath_hazard()` is a two-actor function (ego, hazard). It cannot check whether a third actor (lead) blocks the sight line. With `DETECTION_SOURCE="groundtruth"` this means occlusion is invisible to the detection gate in the cut-out scenario.
+
+**Fix — Option 2 (ground-truth + line-of-sight gate):**
+
+New pure-geometry module `core/occlusion.py` (no CARLA dependency):
+
+```python
+def sight_line_occluded(lead_lon, lead_lat, target_lon, target_lat, lat_clear, lon_margin):
+    between = (0.0 < lead_lon < target_lon - lon_margin)
+    return between and (abs(lead_lat - target_lat) < lat_clear)
+```
+
+In `core/runner_cutout.py`, after the `DETECTION_SOURCE` block, the gate overrides `detected_now` to `False` while the lead blocks the sight line:
+
+```python
+if getattr(cfg, "OCCLUSION_GATE", False) and detected_now:
+    _, lead_lon, lead_lat = actors.inpath_hazard(
+        ego, lead, cfg.INPATH_MAX_RANGE + 50.0, 999.0, 0.0)
+    if actors.sight_line_occluded(lead_lon, lead_lat, lon, lat,
+                                   cfg.OCCLUSION_LAT_CLEAR, cfg.OCCLUSION_LON_MARGIN):
+        detected_now = False
+```
+
+The gate is applied **before** `PerceptionDegrader`, so degradation layers (latency, noise, dropout) operate on the already-gated value. This composes correctly: a `dropout_mode="miss"` on a gated `False` stays `False`; a latency delay on the gate-open event delays the first `True` perception, as intended.
+
+**New config keys** in `config/scenario_cutout.py`:
+
+| Key | Default | Meaning |
+|---|---|---|
+| `OCCLUSION_GATE` | `True` | Enable the gate; set `False` for old always-detected behaviour |
+| `OCCLUSION_LAT_CLEAR` | `1.5` m | Lateral clearance (lead − target in ego frame) before target is visible `[TO BE TUNED]` |
+| `OCCLUSION_LON_MARGIN` | `2.0` m | Lead is no longer "in front of" target once `lead_lon >= target_lon − margin` `[TO BE TUNED]` |
+
+**Scope protection:**
+- Cut-in, lead-brake, CCRs runners: byte-for-byte unchanged.
+- CCRs has no lead occluder; `inpath_hazard` result is correct as-is.
+- `core/occlusion.sight_line_occluded` re-exported via `actors.sight_line_occluded` for call-site compatibility.
+
+#### Verification (no CARLA)
+
+```bash
+# Unit-test the geometry (9 cases, no CARLA needed)
+python3 tests/test_occlusion_gate.py
+
+# Syntax check all changed files
+python3 -m py_compile core/viz.py core/actors.py core/occlusion.py \
+    core/runner_cutout.py config/scenario_cutout.py
+```
+
+*Last updated: 2026-07-22.*
