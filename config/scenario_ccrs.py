@@ -108,6 +108,14 @@ SHOW_WINDOW = True
 # This controls available reaction time (TTC at spawn = (approach_d - GAP_OFFSET) / ego_ms).
 # Matches Euro-NCAP CCRs spirit: varying approach distance = varying available reaction time.
 APPROACH_DISTANCES = [30.0, 40.0, 50.0, 60.0, 70.0]   # m  [TO BE TUNED in CARLA]
+
+# ── Robust target spawn: z-sweep ─────────────────────────────────────────────
+# Some positions on the train000 3DGS mesh reject the nominal z=0.25 (bad terrain
+# patch or obstacle at that world coordinate).  The runner tries each z in order;
+# the first successful spawn is used.  A non-nominal z triggers a console warning
+# so the user can verify the placement visually in CARLA.
+# Known issue: approach_d=60 m fails at z=0.25 but succeeds at a higher z.
+SPAWN_Z_SWEEP = [0.25, 0.5, 0.75, 1.0, 1.5]  # m — z values tried in order
 # Surface gaps (approx, GAP_OFFSET ≈ 4.5 m): ~25.5 / ~35.5 / ~45.5 / ~55.5 / ~65.5 m
 # TTC at spawn examples: 30 m + 60 km/h ≈ 1.5 s (hard); 70 m + 20 km/h ≈ 11.8 s (easy)
 # All 5 values are conflict cases: worst-case 70 m @ 20 km/h → t ≈ 11.8 s < 20 s window ✓

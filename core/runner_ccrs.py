@@ -113,7 +113,20 @@ def run_case(sess, cfg, case, controller_name, delay_frames, detector,
         if "target_x" in case:
             target_spawn["x"] = case["target_x"]
             target_spawn["y"] = case["target_y"]
-        target = actors.spawn_vehicle(world, **target_spawn)
+        # Robust spawn: try SPAWN_Z_SWEEP z-values in order.  Some positions on the
+        # train000 3DGS mesh reject the nominal z (obstacle / terrain irregularity at
+        # that world coordinate); stepping up in z finds a valid surface.
+        _z_sweep = list(getattr(cfg, "SPAWN_Z_SWEEP", [target_spawn["z"]]))
+        if target_spawn["z"] not in _z_sweep:
+            _z_sweep.insert(0, target_spawn["z"])
+        target = None
+        for _z in _z_sweep:
+            target = actors.spawn_vehicle(world, **dict(target_spawn, z=_z))
+            if target:
+                if abs(_z - cfg.TARGET_SPAWN["z"]) > 1e-3:
+                    print(f"[SPAWN] TARGET spawned at z={_z:.2f} "
+                          f"(nominal z={cfg.TARGET_SPAWN['z']:.2f} failed — verify visually in CARLA)")
+                break
         if not target:
             rec.result_txt = "TARGET spawn failed"; return rec, None
         actor_list.append(target)

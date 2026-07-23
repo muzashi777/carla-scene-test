@@ -133,6 +133,32 @@ def run_case(sess, cfg, case, controller_name, delay_frames, detector,
         ego.apply_control(carla.VehicleControl(brake=1.0, hand_brake=True))
         actors.set_friction(ego, case["mu"])
 
+        # Enforce minimum centre-to-centre headway so the lead's bounding box does not
+        # overlap the ego at spawn (CARLA's try_spawn_actor rejects overlapping actors).
+        # Proxy: treat lead half-length ≈ ego half-length (both vehicle.ue4.audi.tt class).
+        _ego_half    = ego.bounding_box.extent.x
+        _min_headway = 2.0 * _ego_half + getattr(cfg, "SPAWN_CLEARANCE_M", 0.5)
+        if headway_d < _min_headway:
+            print(f"[SPAWN] headway_d={headway_d:.3f}m < min {_min_headway:.3f}m "
+                  f"(2×ego_half={2*_ego_half:.3f}m + clearance); "
+                  f"clamping to {_min_headway:.3f}m")
+            headway_d        = _min_headway
+            rec.headway_d    = headway_d
+            cutout_trigger_d = reveal_ttc * ego_ms + cfg.GAP_OFFSET - headway_d
+
+        # Infeasibility guard: if the post-clamp lead-to-target surface gap at trigger is
+        # below MIN_TRIGGER_SURF_GAP_M, the lead cannot complete the lane-change before
+        # hitting the target.  Mark the cell as SCENARIO_INFEASIBLE (kept in matrix/CSV).
+        _trig_surf_gap = cutout_trigger_d - 2.0 * _ego_half
+        _min_trig_gap  = getattr(cfg, "MIN_TRIGGER_SURF_GAP_M", 1.0)
+        if _trig_surf_gap < _min_trig_gap:
+            print(f"[SPAWN] SCENARIO_INFEASIBLE: trigger surf gap {_trig_surf_gap:.3f}m "
+                  f"< {_min_trig_gap:.1f}m at reveal_ttc={reveal_ttc:.1f}s, "
+                  f"{case['ego_speed_kmh']:.0f} km/h — lead cannot manoeuvre out before "
+                  f"hitting stationary target; marking cell and skipping run")
+            rec.result_txt = "SCENARIO_INFEASIBLE"
+            return rec, None
+
         # ── LEAD — spawn ahead of ego along the ego forward vector ──
         yaw_rad = math.radians(cfg.EGO_SPAWN["yaw"])
         lead_x = cfg.EGO_SPAWN["x"] + headway_d * math.cos(yaw_rad)

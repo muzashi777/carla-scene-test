@@ -107,6 +107,20 @@ LEAD_SPEED_MAX_THROTTLE = 0.6   # max throttle command (0–1) [TO BE TUNED]
 # values; GAP_OFFSET is the per-case geometry constant that shifts the trigger distance.
 FIXED_HEADWAY_THW = 0.8   # s — fixed following distance [TO BE TUNED in CARLA]
 
+# ── Spawn geometry safety margins ────────────────────────────────────────────
+# SPAWN_CLEARANCE_M: minimum surface gap enforced between ego and lead at spawn.
+#   If headway_d < 2×ego_half_len + SPAWN_CLEARANCE_M, headway_d is clamped up.
+#   At 20 km/h the nominal headway (0.8×5.556=4.444 m) overlaps the bounding boxes
+#   (combined ≈4.5 m); 0.5 m clearance yields a clamped headway of ~5.0 m.
+SPAWN_CLEARANCE_M    = 0.5  # m
+
+# MIN_TRIGGER_SURF_GAP_M: minimum surface gap between lead and target at the
+#   cut-out trigger point, required for the physics-based lane-change to succeed.
+#   If the post-clamp trigger gap falls below this, the run is marked SCENARIO_INFEASIBLE
+#   (kept in the CSV for auditing; filtered out in conflict-rate analysis).
+#   At 20 km/h + reveal_ttc=1.0 the gap is only 0.556 m (0.10 s); not viable.
+MIN_TRIGGER_SURF_GAP_M = 1.0  # m
+
 # ── Target reveal-TTC: primary matrix variable ────────────────────────────────
 # reveal_ttc = surface gap / ego_ms at the instant the lead cut-out triggers.
 # Per case: CUTOUT_TRIGGER_D = (reveal_ttc - FIXED_HEADWAY_THW) × ego_ms + GAP_OFFSET

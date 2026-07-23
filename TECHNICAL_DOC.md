@@ -120,7 +120,7 @@ cutout_trigger_d = (reveal_ttc − 0.8) × ego_ms + GAP_OFFSET
 
 All 50 cases have `cutout_trigger_d > 0` (min: 5.61 m at 20 km/h + reveal_ttc=1.0). Conflict is defined against the stationary target and is independent of `reveal_ttc` — all 50 cases are conflict cases (worst: 20 km/h → t = 7.9 s < 20 s window).
 
-**Tuning note:** At `reveal_ttc = 1.0`, 20 km/h: lead-to-target surface gap at trigger ≈ 1.1 m. If CARLA physics shows the lead cannot complete the lane change here, increase `GAP_OFFSET` (e.g. 5.0 m) — this shifts `cutout_trigger_d` uniformly without altering the matrix axes.
+**Spawn geometry:** At 20 km/h, `headway_d = 0.8 × 5.556 = 4.444 m`. This is below the combined ego + lead half-lengths (≈ 4.5 m from `GAP_OFFSET`), causing bounding-box overlap and a CARLA spawn rejection. `runner_cutout.py` enforces a minimum headway (`SPAWN_CLEARANCE_M = 0.5 m`) and clamps to ~5.0 m. At `reveal_ttc = 1.0` the post-clamp trigger surface gap is only 0.556 m (0.10 s at 20 km/h) — the physics-based lane change cannot complete; these cells are marked `result_txt = "SCENARIO_INFEASIBLE"` and retained in the CSV (filtered in analysis). See `tools/check_cutout_spawn.py` for the full per-cell feasibility table.
 
 ---
 
@@ -1541,5 +1541,46 @@ python3 -m py_compile config/scenario_cutin.py config/scenario_lead_brake.py \
 2. **Roof clearance**: at ~5–10 m gap to the lead, the lead's roofline should be roughly at mid-frame height or lower (not near the top).
 3. **No clipping**: the camera should not be inside the vehicle mesh (no fisheye / blacked-out corners). If it is, reduce `z` to 0.4 m.
 4. **Occlusion gate (cut-out)**: run `run_single_cutout.py` with `SHOW_WINDOW=True`. The `det=False` state in the console should persist for a realistic duration while the lead is squarely in front of the target. `det=True` should switch on shortly after the lead visibly clears.
+
+---
+
+### Spawn Fixes — July 2026
+
+**Problem:** `TEST_MODE=original` on train000 produced 30/150 "LEAD spawn failed" rows at every 20 km/h cut-out cell, and 30/150 "TARGET spawn failed" rows at every CCRs `approach_d=60 m` cell (both affecting all three controllers identically — confirmed geometry, not controller logic).
+
+**Root causes:**
+
+| Scenario | Cell | Root cause |
+|---|---|---|
+| Cut-out | 20 km/h (all 5 reveal_ttc) | `headway_d = 0.8 × 5.556 = 4.444 m` < combined half-lengths ≈ 4.5 m → bounding-box overlap → CARLA spawn rejection |
+| CCRs | approach_d = 60 m (all 5 speeds, both μ) | Fixed `z = 0.25` falls inside obstacle / below road surface at `(−43.64, −32.74)` on train000 mesh |
+
+**Reveal-TTC invariant preserved (cut-out):** `headway_d` cancels in the ego→target surface gap formula; clamping it does not change the TTC at which the target is revealed. ✓
+
+**Feasibility table (25 cut-out speed×ttc cells after headway clamp to 5.0 m):**
+
+| speed | reveal_ttc | trig_surf_gap | verdict |
+|---|---|---|---|
+| 20 km/h | 1.0 s | 0.556 m (0.10 s) | SCENARIO_INFEASIBLE — marked, kept in CSV |
+| 20 km/h | 1.5–3.0 s | 3.3–11.7 m | Fixed by spawn clamp |
+| 30–60 km/h | all | ≥ 1.7 m | No change needed |
+
+**Modified files:**
+
+| File | Change |
+|---|---|
+| `core/runner_cutout.py` | After ego spawn: compute `min_headway = 2×ego_half + SPAWN_CLEARANCE_M`; clamp `headway_d` and recompute `cutout_trigger_d`; if post-clamp trigger surf gap < `MIN_TRIGGER_SURF_GAP_M`, set `result_txt="SCENARIO_INFEASIBLE"` and return early |
+| `core/runner_ccrs.py` | Target spawn: try each z in `cfg.SPAWN_Z_SWEEP` in order; print warning if non-nominal z is used |
+| `config/scenario_cutout.py` | Add `SPAWN_CLEARANCE_M = 0.5` and `MIN_TRIGGER_SURF_GAP_M = 1.0` |
+| `config/scenario_ccrs.py` | Add `SPAWN_Z_SWEEP = [0.25, 0.5, 0.75, 1.0, 1.5]` |
+| `tools/check_cutout_spawn.py` | New — offline per-cell feasibility checker (no CARLA needed) |
+
+**Untouched:** `runner.py`, `runner_lead_brake.py`, `scenario_*.py`, `actors.py`, `conflict.py`, all config files for cut-in / lead-brake, CSV schema, `is_conflict` logic, matrix 5×5×2=50 dimensions.
+
+#### Verify in CARLA (required)
+
+1. **Cut-out 20 km/h cells:** run `TEST_MODE=original python run_matrix_cutout.py`. Confirm reveal_ttc ≥ 1.5 rows now produce AVOIDED or COLLISION (not "LEAD spawn failed"). Confirm reveal_ttc=1.0 at 20 km/h shows `result_txt = SCENARIO_INFEASIBLE` in the CSV.
+2. **CCRs 60 m:** run `TEST_MODE=original python run_matrix_ccrs.py`. Watch for `[SPAWN] TARGET spawned at z=X.XX (nominal z=0.25 failed)` in the console. **Visually verify** the target vehicle is sitting on the road surface at `(−43.64, −32.74)` — not floating or buried. If buried at the z chosen, increase `SPAWN_Z_SWEEP` values or nudge the 60 m approach distance to 61–62 m.
+3. **Cut-out 20 km/h headway_d:** confirm the console logs `[SPAWN] headway_d=4.444m < min 5.0m; clamping to 5.0m` for these cells.
 
 *Last updated: 2026-07-23.*
