@@ -103,12 +103,22 @@ SINGLE_CONTROLLER  = "proposed_enhanced"
 SINGLE_DELAY_FRAMES = 0
 SHOW_WINDOW = True
 
+# ── Initial approach distance (centre-to-centre, ego → target) ──────────────
+# The target is spawned at EGO_SPAWN + approach_d × forward_vector per case.
+# This controls available reaction time (TTC at spawn = (approach_d - GAP_OFFSET) / ego_ms).
+# Matches Euro-NCAP CCRs spirit: varying approach distance = varying available reaction time.
+APPROACH_DISTANCES = [30.0, 40.0, 50.0, 60.0, 70.0]   # m  [TO BE TUNED in CARLA]
+# Surface gaps (approx, GAP_OFFSET ≈ 4.5 m): ~25.5 / ~35.5 / ~45.5 / ~55.5 / ~65.5 m
+# TTC at spawn examples: 30 m + 60 km/h ≈ 1.5 s (hard); 70 m + 20 km/h ≈ 11.8 s (easy)
+# All 5 values are conflict cases: worst-case 70 m @ 20 km/h → t ≈ 11.8 s < 20 s window ✓
+
 # ══════════════════════════════════════════════════════════════════
-#  TEST MATRIX for run_matrix_ccrs.py  (5 speed × 2 μ = 10 cases/controller)
-#  Target is at a fixed world position, so no headway/trigger variable.
+#  TEST MATRIX for run_matrix_ccrs.py  (5 speed × 5 distance × 2 μ = 50 cases/controller)
+#  Target spawn is derived per case from approach_d along the ego forward vector.
 # ══════════════════════════════════════════════════════════════════
 MATRIX = dict(
     ego_speed_kmh = [20.0, 30.0, 40.0, 50.0, 60.0],
+    approach_d    = APPROACH_DISTANCES,
     mu            = [MU_DRY, MU_WET],
 )
 

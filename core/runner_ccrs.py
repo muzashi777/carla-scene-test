@@ -68,6 +68,7 @@ class CCRsRecord:
     seed: int = 0
     comp_source: str = ""
     comp_L_frames: int = 0
+    approach_d: float = 0.0
 
 
 def run_case(sess, cfg, case, controller_name, delay_frames, detector,
@@ -96,6 +97,7 @@ def run_case(sess, cfg, case, controller_name, delay_frames, detector,
     rec.comp_source    = spec.get("comp_source", "")
     rec.comp_L_frames  = spec.get("comp_L_frames",
                                   delay_frames if spec.get("comp_source") == "oracle" else 0)
+    rec.approach_d     = case.get("approach_d", 0.0)
 
     try:
         # ── EGO ──
@@ -106,8 +108,12 @@ def run_case(sess, cfg, case, controller_name, delay_frames, detector,
         ego.apply_control(carla.VehicleControl(brake=1.0, hand_brake=True))
         actors.set_friction(ego, case["mu"])
 
-        # ── TARGET (stationary) ──
-        target = actors.spawn_vehicle(world, **cfg.TARGET_SPAWN)
+        # ── TARGET (stationary) — position from case if approach_d axis provided ──
+        target_spawn = dict(cfg.TARGET_SPAWN)
+        if "target_x" in case:
+            target_spawn["x"] = case["target_x"]
+            target_spawn["y"] = case["target_y"]
+        target = actors.spawn_vehicle(world, **target_spawn)
         if not target:
             rec.result_txt = "TARGET spawn failed"; return rec, None
         actor_list.append(target)

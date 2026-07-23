@@ -138,6 +138,26 @@ def print_summary(path, label_order=None):
             delta = (agg[prop]["rc_all"] - agg[base]["rc_all"]) * 100
             print(f"    {prop:<22} {delta:+.1f}%")
 
+    # Cut-out diagnostic columns (present only in cutout CSVs)
+    diag_cols = ("range_at_reveal", "ttc_at_reveal", "time_reveal_to_brake")
+    if all(c in rows[0] for c in diag_cols):
+        print(f"\n  Cut-out reveal diagnostics (mean over cases where reveal occurred):")
+        print(f"  {'Controller':<22} {'range@reveal':>13} {'ttc@reveal':>11} {'t_reveal→brake':>15}")
+        print(f"  {'-'*22} {'-'*13} {'-'*11} {'-'*15}")
+        for label in label_list:
+            label_rows = [r for r in rows if r.get("label") == label]
+            rev_range = [_to_float(r["range_at_reveal"]) for r in label_rows
+                         if _to_float(r["range_at_reveal"]) >= 0]
+            rev_ttc   = [_to_float(r["ttc_at_reveal"]) for r in label_rows
+                         if _to_float(r["ttc_at_reveal"]) >= 0]
+            rev_lag   = [_to_float(r["time_reveal_to_brake"]) for r in label_rows
+                         if _to_float(r["time_reveal_to_brake"]) >= 0]
+            def _fmt(vals):
+                if not vals:
+                    return "     —"
+                return f"{sum(vals)/len(vals):6.2f}(n={len(vals)})"
+            print(f"  {label:<22} {_fmt(rev_range):>13} {_fmt(rev_ttc):>11} {_fmt(rev_lag):>15}")
+
     print()
 
 

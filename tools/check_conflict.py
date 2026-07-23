@@ -98,37 +98,41 @@ def check_lead_brake():
 
 
 def check_ccrs():
-    speeds  = cfg_ccrs.MATRIX["ego_speed_kmh"]
-    mu_vals = cfg_ccrs.MATRIX["mu"]
-    n_total = len(speeds) * len(mu_vals)
+    speeds    = cfg_ccrs.MATRIX["ego_speed_kmh"]
+    dist_vals = cfg_ccrs.MATRIX["approach_d"]
+    mu_vals   = cfg_ccrs.MATRIX["mu"]
+    n_total   = len(speeds) * len(dist_vals) * len(mu_vals)
+    max_time  = cfg_ccrs.MAX_TICKS * cfg_ccrs.FIXED_DT
 
-    import math as _math
-    dist = _math.hypot(cfg_ccrs.EGO_SPAWN["x"] - cfg_ccrs.TARGET_SPAWN["x"],
-                       cfg_ccrs.EGO_SPAWN["y"] - cfg_ccrs.TARGET_SPAWN["y"])
-    surface_gap = max(0.0, dist - cfg_ccrs.GAP_OFFSET)
-    max_time = cfg_ccrs.MAX_TICKS * cfg_ccrs.FIXED_DT
+    yaw_rad = math.radians(cfg_ccrs.EGO_SPAWN["yaw"])
+    fwd_x = math.cos(yaw_rad)
+    fwd_y = math.sin(yaw_rad)
 
     print("\n" + "=" * 72)
     print("CCRs matrix conflict check  (train000)")
-    print(f"  matrix: {len(speeds)} speeds × {len(mu_vals)} μ = {n_total} cases")
+    print(f"  matrix: {len(speeds)} speeds × {len(dist_vals)} approach_d × {len(mu_vals)} μ "
+          f"= {n_total} cases")
     print(f"  speeds (km/h): {speeds}")
-    print(f"  ego→target dist = {dist:.1f} m  |  GAP_OFFSET = {cfg_ccrs.GAP_OFFSET} m  "
-          f"→ surface_gap ≈ {surface_gap:.1f} m")
-    print(f"  MAX_TIME = {max_time:.0f} s  |  t_conflict(20 km/h) = {surface_gap/(20/3.6):.1f} s")
+    print(f"  approach_d (m): {dist_vals}")
+    print(f"  GAP_OFFSET = {cfg_ccrs.GAP_OFFSET} m  |  MAX_TIME = {max_time:.0f} s")
     print()
-    print(f"  {'speed':>8} {'mu':>6}  t_conflict    conflict?")
-    print(f"  {'-'*8} {'-'*6}  {'-'*11}  ---------")
+    print(f"  {'speed':>8} {'appr_d':>8} {'mu':>6}  surf_gap  t_conflict  conflict?")
+    print(f"  {'-'*8} {'-'*8} {'-'*6}  {'-'*8}  {'-'*10}  ---------")
 
     n_conflict = 0
-    for v, mu in itertools.product(speeds, mu_vals):
-        case = {"ego_speed_kmh": v, "mu": mu}
+    for v, d, mu in itertools.product(speeds, dist_vals, mu_vals):
+        tx = cfg_ccrs.EGO_SPAWN["x"] + d * fwd_x
+        ty = cfg_ccrs.EGO_SPAWN["y"] + d * fwd_y
+        case = {"ego_speed_kmh": v, "mu": mu, "target_x": tx, "target_y": ty}
         flag = ccrs_is_conflict(case, cfg_ccrs)
         if flag:
             n_conflict += 1
         v_ms = v / 3.6
-        t = surface_gap / v_ms if v_ms > 1e-3 else float("inf")
+        dist_c = math.hypot(cfg_ccrs.EGO_SPAWN["x"] - tx, cfg_ccrs.EGO_SPAWN["y"] - ty)
+        sg = max(0.0, dist_c - cfg_ccrs.GAP_OFFSET)
+        t = sg / v_ms if v_ms > 1e-3 else float("inf")
         mark = "✓ conflict" if flag else "✗ no-conflict"
-        print(f"  {v:>5.0f} km/h  {mu:>5.2f}  {t:>8.2f} s    {mark}")
+        print(f"  {v:>5.0f} km/h  {d:>6.0f} m  {mu:>5.2f}  {sg:>6.1f} m  {t:>8.2f} s  {mark}")
 
     n_no = n_total - n_conflict
     print(f"\n  SUMMARY: {n_conflict}/{n_total} conflict,  {n_no}/{n_total} no-conflict")
@@ -136,31 +140,31 @@ def check_ccrs():
 
 
 def check_cutout():
-    speeds   = cfg_co.MATRIX["ego_speed_kmh"]
-    thw_vals = cfg_co.HEADWAY_THW
-    mu_vals  = cfg_co.MATRIX["mu"]
-    n_total  = len(speeds) * len(thw_vals) * len(mu_vals)
+    speeds         = cfg_co.MATRIX["ego_speed_kmh"]
+    reveal_ttc_vals = cfg_co.MATRIX["reveal_ttc"]
+    mu_vals        = cfg_co.MATRIX["mu"]
+    n_total        = len(speeds) * len(reveal_ttc_vals) * len(mu_vals)
 
-    import math as _math
-    dist = _math.hypot(cfg_co.EGO_SPAWN["x"] - cfg_co.TARGET_SPAWN["x"],
-                       cfg_co.EGO_SPAWN["y"] - cfg_co.TARGET_SPAWN["y"])
+    dist = math.hypot(cfg_co.EGO_SPAWN["x"] - cfg_co.TARGET_SPAWN["x"],
+                      cfg_co.EGO_SPAWN["y"] - cfg_co.TARGET_SPAWN["y"])
     surface_gap = max(0.0, dist - cfg_co.GAP_OFFSET)
     max_time = cfg_co.MAX_TICKS * cfg_co.FIXED_DT
 
     print("\n" + "=" * 72)
     print("CUT-OUT matrix conflict check  (train000, conflict = ego vs stationary target)")
-    print(f"  matrix: {len(speeds)} speeds × {len(thw_vals)} THW × {len(mu_vals)} μ = {n_total} cases")
+    print(f"  matrix: {len(speeds)} speeds × {len(reveal_ttc_vals)} reveal_ttc × {len(mu_vals)} μ "
+          f"= {n_total} cases")
     print(f"  speeds (km/h): {speeds}")
-    print(f"  THW (s): {thw_vals}  [lead headway — does not affect conflict formula]")
+    print(f"  reveal_ttc (s): {reveal_ttc_vals}  [does not affect conflict formula]")
     print(f"  ego→target dist = {dist:.1f} m  |  GAP_OFFSET = {cfg_co.GAP_OFFSET} m  "
           f"→ surface_gap ≈ {surface_gap:.1f} m")
     print(f"  MAX_TIME = {max_time:.0f} s")
     print()
-    print(f"  {'speed':>8} {'THW':>6} {'mu':>6}  t_conflict    conflict?")
-    print(f"  {'-'*8} {'-'*6} {'-'*6}  {'-'*11}  ---------")
+    print(f"  {'speed':>8} {'reveal_ttc':>11} {'mu':>6}  t_conflict    conflict?")
+    print(f"  {'-'*8} {'-'*11} {'-'*6}  {'-'*11}  ---------")
 
     n_conflict = 0
-    for v, thw, mu in itertools.product(speeds, thw_vals, mu_vals):
+    for v, ttc, mu in itertools.product(speeds, reveal_ttc_vals, mu_vals):
         case = {"ego_speed_kmh": v, "mu": mu}
         flag = cutout_is_conflict(case, cfg_co)
         if flag:
@@ -168,7 +172,7 @@ def check_cutout():
         v_ms = v / 3.6
         t = surface_gap / v_ms if v_ms > 1e-3 else float("inf")
         mark = "✓ conflict" if flag else "✗ no-conflict"
-        print(f"  {v:>5.0f} km/h  {thw:>5.1f}s  {mu:>5.2f}  {t:>8.2f} s    {mark}")
+        print(f"  {v:>5.0f} km/h  {ttc:>9.1f}s  {mu:>5.2f}  {t:>8.2f} s    {mark}")
 
     n_no = n_total - n_conflict
     print(f"\n  SUMMARY: {n_conflict}/{n_total} conflict,  {n_no}/{n_total} no-conflict")

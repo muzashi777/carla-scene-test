@@ -29,7 +29,7 @@ The scene-name check will raise a `RuntimeError` with a clear message if the wro
 config/
   scenario_cutin.py        ★ All parameters for cut-in (scene03_2, YOLO, μ, matrix, controllers)
   scenario_lead_brake.py   ★ All parameters for lead-brake (scene03_2; same structure)
-  scenario_ccrs.py         ★ All parameters for CCRs (train000; 5×2=10 cases/controller)
+  scenario_ccrs.py         ★ All parameters for CCRs (train000; 5×5×2=50 cases/controller)
   scenario_cutout.py       ★ All parameters for cut-out (train000; 5×5×2=50 cases/controller)
 core/
   carla_session.py         Open/close sync mode, restore original settings
@@ -86,7 +86,7 @@ run_perception_log.py      Run YOLO perception logging (background + actor passe
 ```bash
 python tools/check_conflict.py
 LEAD_DECEL=6.0 python tools/check_conflict.py   # verify with paper deceleration
-# Checks all 4 scenarios: cut-in (50), lead-brake (50), CCRs (10), cut-out (50) = 160 total
+# Checks all 4 scenarios: cut-in (50), lead-brake (50), CCRs (50), cut-out (50) = 200 total
 ```
 
 **Scenario 1 — Cut-in / Dart-out (scene03_2):**
@@ -108,7 +108,7 @@ MATRIX_VIZ=1 python run_matrix_lead.py      # enable display during matrix run
 ```bash
 # Load train000 in CARLA first
 python run_single_ccrs.py                # debug single case with display
-python run_matrix_ccrs.py                # sweep 10 cases × 3 controllers → results/ccrs_matrix_*.csv
+python run_matrix_ccrs.py                # sweep 50 cases × 3 controllers → results/ccrs_matrix_*.csv
 TEST_MODE=latency python run_matrix_ccrs.py
 MATRIX_VIZ=1 python run_matrix_ccrs.py  # enable display
 ```
@@ -207,13 +207,18 @@ Sweep constants (`LATENCY_DELAY_FRAMES`, `NOISE_SIGMA_M_SWEEP`, `COMP_CONTROLLER
 | Lead-brake | scene03_2 | `ego_speed_kmh` | 20, 30, 40, 50, 60 km/h | 50 |
 | Lead-brake | scene03_2 | `HEADWAY_THW` | 1.0, 1.5, 2.0, 2.5, 3.0 s | |
 | Lead-brake | scene03_2 | `mu` | 0.85 (dry), 0.40 (wet) | |
-| **CCRs** | **train000** | `ego_speed_kmh` | 20, 30, 40, 50, 60 km/h | **10** |
+| **CCRs** | **train000** | `ego_speed_kmh` | 20, 30, 40, 50, 60 km/h | **50** |
+| CCRs | train000 | `approach_d` | 30, 40, 50, 60, 70 m (centre-to-centre from ego spawn) | |
 | CCRs | train000 | `mu` | 0.85 (dry), 0.40 (wet) | |
 | **Cut-out** | **train000** | `ego_speed_kmh` | 20, 30, 40, 50, 60 km/h | **50** |
-| Cut-out | train000 | `headway_thw` | 1.0, 1.5, 2.0, 2.5, 3.0 s | |
+| Cut-out | train000 | `reveal_ttc` | 1.0, 1.5, 2.0, 2.5, 3.0 s (TTC at cut-out trigger) | |
 | Cut-out | train000 | `mu` | 0.85 (dry), 0.40 (wet) | |
 
-**Case count:** 50 / 50 / 10 / 50 cases/controller × 3 controllers = 150 / 150 / 30 / 150 runs per scenario (= 480 total across all 4 scenarios for `TEST_MODE=original`).
+**Cut-out fixed headway:** `FIXED_HEADWAY_THW = 0.8 s` (not swept). `headway_d` and `cutout_trigger_d` are derived per case from `reveal_ttc` in `run_matrix_cutout.py`. Diagnostic columns `range_at_reveal`, `ttc_at_reveal`, `time_reveal_to_brake` are written to the CSV and summarised by `core/report.py`. Hardest case (`reveal_ttc = 1.0`, 20 km/h): `cutout_trigger_d ≈ 5.6 m`, lead-to-target surface gap ≈ 1.1 m — verify CARLA physics before running; if the lead cannot complete the lane change, increase `GAP_OFFSET` slightly (e.g. 5.0 m), not the matrix values.
+
+**CCRs approach distance:** Target spawned per case at `EGO_SPAWN + approach_d × forward_vector`, covering short/medium/long TTC-at-spawn scenarios (TTC@30m+60km/h ≈ 1.5 s; TTC@70m+20km/h ≈ 11.8 s). Target coordinates `target_x`/`target_y` are passed through the case dict.
+
+**Case count:** 50 / 50 / 50 / 50 cases/controller × 3 controllers = 150 runs per scenario (= 600 total across all 4 scenarios for `TEST_MODE=original`).
 
 ---
 

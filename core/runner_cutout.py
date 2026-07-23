@@ -46,14 +46,14 @@ import control.enhanced_inflation    # noqa: F401
 
 @dataclass
 class CutOutRecord:
-    """Per-run record for the Cut-out scenario.  Extends CCRsRecord with headway fields."""
+    """Per-run record for the Cut-out scenario."""
     label: str
     controller: str
     delay_frames: int
     ego_speed_kmh: float
     mu: float
-    headway_thw: float              # THW (s) used to derive headway_d; 0 if fixed-distance mode
-    headway_d: float                # actual lead-to-ego headway in metres
+    reveal_ttc: float = 0.0         # target TTC (s) at the cut-out trigger tick (matrix axis)
+    headway_d: float = 0.0          # ego↔lead headway in metres (= FIXED_HEADWAY_THW × ego_ms)
     avoided: bool = False
     collision_with: str = ""
     s_clearance: float = 0.0
@@ -76,6 +76,10 @@ class CutOutRecord:
     seed: int = 0
     comp_source: str = ""
     comp_L_frames: int = 0
+    # ── Reveal / reaction diagnostics ────────────────────────────────────────
+    range_at_reveal: float = -1.0   # surface gap (m) at first reveal tick (-1 = never revealed)
+    ttc_at_reveal: float = -1.0     # TTC (s) at first reveal tick
+    time_reveal_to_brake: float = -1.0  # s from reveal to brake onset (-1 = no brake after reveal)
 
 
 def run_case(sess, cfg, case, controller_name, delay_frames, detector,
@@ -88,21 +92,26 @@ def run_case(sess, cfg, case, controller_name, delay_frames, detector,
     spec = run_spec or {}
     _seed = (sum(ord(c) for c in spec.get("label", controller_name)) * 10000 + case_idx) % (2**32)
 
-    # ── Lead headway: THW → metres or fixed distance ──
+    # ── Lead headway: fixed THW (not swept) ──
     ego_ms = case["ego_speed_kmh"] / 3.6
-    if getattr(cfg, "USE_THW", False):
-        headway_thw = case["headway_thw"]
-        headway_d = ego_ms * headway_thw
-    else:
-        headway_thw = 0.0
-        headway_d = case["headway_d"]
+    headway_d = case.get("headway_d", getattr(cfg, "FIXED_HEADWAY_THW", 1.5) * ego_ms)
+    reveal_ttc = case.get("reveal_ttc", 2.0)
+
+    # cut-out trigger distance derived from reveal_ttc if not pre-computed by the matrix script
+    # Formula: ego→target_at_trigger = headway_d + trigger_d  (both cruise at ego_ms)
+    #   → trigger_d = reveal_ttc × ego_ms + GAP_OFFSET - headway_d
+    # GAP_OFFSET here is the config approximation (same as the conflict check).
+    cutout_trigger_d = case.get(
+        "cutout_trigger_d",
+        reveal_ttc * ego_ms + cfg.GAP_OFFSET - headway_d,
+    )
 
     is_conflict = cutout_is_conflict(case, cfg)
 
     rec = CutOutRecord(
         label=controller_name, controller=controller_name, delay_frames=delay_frames,
         ego_speed_kmh=case["ego_speed_kmh"], mu=case["mu"],
-        headway_thw=headway_thw, headway_d=headway_d,
+        reveal_ttc=reveal_ttc, headway_d=headway_d,
         is_conflict=is_conflict,
     )
     rec.noise_sigma_m  = spec.get("noise_sigma_m", 0.0)
@@ -195,7 +204,9 @@ def run_case(sess, cfg, case, controller_name, delay_frames, detector,
             L_sec, _cf, _cs = compensation_latency(spec, cfg)
             predictor = PerceptionPredictor(l_seconds=L_sec)
             predictor.reset()
-        scen = CutOutScenario(ego, lead, target, cfg, case)
+        # Inject derived cutout_trigger_d into case so CutOutScenario picks it up.
+        _case_with_trigger = dict(case, cutout_trigger_d=cutout_trigger_d)
+        scen = CutOutScenario(ego, lead, target, cfg, _case_with_trigger)
         scen.start()
 
         det_buffer = deque(maxlen=1)
@@ -227,6 +238,9 @@ def run_case(sess, cfg, case, controller_name, delay_frames, detector,
         result_txt = "TIMEOUT"
         last_frame = None
         quit_flag = False
+        reveal_tick = -1      # first tick where detected_now=True (occlusion gate open)
+        reveal_gap  = -1.0   # surface gap at that tick
+        reveal_ttc_val = -1.0  # TTC at that tick
 
         # Perception tracks target (stationary); lead_speed/lead_decel are always 0.
         lead_decel_ema = 0.0
@@ -287,9 +301,18 @@ def run_case(sess, cfg, case, controller_name, delay_frames, detector,
                         getattr(cfg, "OCCLUSION_LON_MARGIN", 2.0)):
                     detected_now = False
 
+            # ── Record first reveal tick (pre-degrader, geometric moment) ──
+            if detected_now and reveal_tick < 0:
+                reveal_tick = tick
+                reveal_gap  = gap
+
             rel_speed = max(0.0, (prev_gap - gap) / cfg.FIXED_DT)
             prev_gap = gap
             ttc = (gap / rel_speed) if rel_speed > 1e-3 else math.inf
+
+            # Capture TTC now that rel_speed is available
+            if reveal_tick == tick and reveal_ttc_val < 0:
+                reveal_ttc_val = ttc if not math.isinf(ttc) else -1.0
 
             # Target is stationary: lead_speed=0, lead_decel=0
             lead_ms = actors.speed_ms(target)   # ≈ 0
@@ -378,6 +401,12 @@ def run_case(sess, cfg, case, controller_name, delay_frames, detector,
         if brake_info:
             rec.t_c_warn = 0.0 if math.isinf(brake_info[4]) else brake_info[4]
         rec.dv_speed_var = case["ego_speed_kmh"] - rec.collision_speed_kmh
+
+        if reveal_tick >= 0:
+            rec.range_at_reveal = reveal_gap
+            rec.ttc_at_reveal   = reveal_ttc_val
+            if brake_info is not None and brake_info[0] >= reveal_tick:
+                rec.time_reveal_to_brake = (brake_info[0] - reveal_tick) * cfg.FIXED_DT
 
         print("=" * 60)
         hw_txt = (f"THW={headway_thw:.1f}s→{headway_d:.1f}m" if getattr(cfg, "USE_THW", False)

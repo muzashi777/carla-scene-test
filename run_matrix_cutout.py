@@ -22,13 +22,22 @@ from perception.yolo_detector import YoloDetector
 
 
 def build_cases():
-    """5 speeds × 5 THW × 2 μ = 50 cases/controller (mirrors lead-brake matrix)."""
-    use_thw = getattr(cfg, "USE_THW", False)
-    gap_key = "headway_thw" if use_thw else "headway_d"
-    gap_vals = cfg.MATRIX["headway_thw"] if use_thw else cfg.MATRIX["headway_d"]
+    """5 speeds × 5 reveal_ttc × 2 μ = 50 cases/controller."""
+    fixed_thw = getattr(cfg, "FIXED_HEADWAY_THW", 1.5)
+    gap_offset = getattr(cfg, "GAP_OFFSET", 4.5)
     cases = []
-    for v, g, m in itertools.product(cfg.MATRIX["ego_speed_kmh"], gap_vals, cfg.MATRIX["mu"]):
-        cases.append({"ego_speed_kmh": v, gap_key: g, "mu": m})
+    for v, ttc, m in itertools.product(
+            cfg.MATRIX["ego_speed_kmh"], cfg.MATRIX["reveal_ttc"], cfg.MATRIX["mu"]):
+        ego_ms = v / 3.6
+        headway_d = fixed_thw * ego_ms
+        cutout_trigger_d = (ttc - fixed_thw) * ego_ms + gap_offset
+        cases.append({
+            "ego_speed_kmh":    v,
+            "reveal_ttc":       ttc,
+            "mu":               m,
+            "headway_d":        headway_d,
+            "cutout_trigger_d": cutout_trigger_d,
+        })
     return cases
 
 

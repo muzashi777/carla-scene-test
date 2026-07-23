@@ -9,7 +9,7 @@ Usage:
     TEST_MODE=latency python run_matrix_ccrs.py
     MATRIX_VIZ=1 python run_matrix_ccrs.py      # opt-in display (all runs)
 """
-import sys, os, itertools, datetime
+import sys, os, itertools, datetime, math
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import config.scenario_ccrs as cfg
@@ -22,10 +22,22 @@ from perception.yolo_detector import YoloDetector
 
 
 def build_cases():
-    """5 speeds × 2 μ = 10 cases (no headway variable for CCRs — target is at a fixed world position)."""
+    """5 speeds × 5 approach_d × 2 μ = 50 cases/controller."""
+    yaw_rad = math.radians(cfg.EGO_SPAWN["yaw"])
+    fwd_x = math.cos(yaw_rad)
+    fwd_y = math.sin(yaw_rad)
     cases = []
-    for v, m in itertools.product(cfg.MATRIX["ego_speed_kmh"], cfg.MATRIX["mu"]):
-        cases.append({"ego_speed_kmh": v, "mu": m})
+    for v, d, m in itertools.product(
+            cfg.MATRIX["ego_speed_kmh"], cfg.MATRIX["approach_d"], cfg.MATRIX["mu"]):
+        target_x = cfg.EGO_SPAWN["x"] + d * fwd_x
+        target_y = cfg.EGO_SPAWN["y"] + d * fwd_y
+        cases.append({
+            "ego_speed_kmh": v,
+            "approach_d":    d,
+            "mu":            m,
+            "target_x":      round(target_x, 3),
+            "target_y":      round(target_y, 3),
+        })
     return cases
 
 

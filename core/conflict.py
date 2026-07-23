@@ -210,16 +210,18 @@ def ccrs_is_conflict(case: dict, cfg) -> bool:
     """
     Return True if this CCRs matrix case is a conflict case.
 
-    The target is stationary from the start at cfg.TARGET_SPAWN.
+    Target position is taken from 'case' if 'target_x'/'target_y' are present
+    (set by run_matrix_ccrs.py for the approach-distance axis); otherwise falls
+    back to cfg.TARGET_SPAWN (single-case / legacy behaviour).
     'case' must contain 'ego_speed_kmh'.
-    Uses cfg.EGO_SPAWN, cfg.TARGET_SPAWN, cfg.GAP_OFFSET, cfg.MAX_TICKS, cfg.FIXED_DT.
+    Uses cfg.EGO_SPAWN, cfg.GAP_OFFSET, cfg.MAX_TICKS, cfg.FIXED_DT.
     """
     return _kinematic_conflict_stationary_target(
         ego_speed_kmh=case["ego_speed_kmh"],
         ego_spawn_x=cfg.EGO_SPAWN["x"],
         ego_spawn_y=cfg.EGO_SPAWN["y"],
-        target_spawn_x=cfg.TARGET_SPAWN["x"],
-        target_spawn_y=cfg.TARGET_SPAWN["y"],
+        target_spawn_x=case.get("target_x", cfg.TARGET_SPAWN["x"]),
+        target_spawn_y=case.get("target_y", cfg.TARGET_SPAWN["y"]),
         gap_offset_m=cfg.GAP_OFFSET,
         max_ticks=cfg.MAX_TICKS,
         fixed_dt=cfg.FIXED_DT,

@@ -61,6 +61,9 @@ class CutOutScenario:
 
         self._phase = _CRUISE
 
+        # Per-case trigger distance (derived from reveal_ttc in runner; falls back to config).
+        self._trigger_d = case.get("cutout_trigger_d", cfg.CUTOUT_TRIGGER_D)
+
         # Recorded at the cut-out trigger tick:
         self._trigger_yaw = 0.0   # lead yaw (degrees) at trigger
         self._rx = self._ry = 0.0  # right-vector components at trigger (world frame)
@@ -96,7 +99,7 @@ class CutOutScenario:
 
         # ── CRUISE phase ──────────────────────────────────────────────────────
         if self._phase == _CRUISE:
-            if dist2d(self.lead, self.target) <= self.cfg.CUTOUT_TRIGGER_D:
+            if dist2d(self.lead, self.target) <= self._trigger_d:
                 just_triggered = True
                 tf = self.lead.get_transform()
                 self._trigger_yaw = tf.rotation.yaw

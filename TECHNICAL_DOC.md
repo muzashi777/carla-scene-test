@@ -86,6 +86,42 @@ Formula: 5 × 5 × 2 = **50 cases**. Total with 3 controllers: **150 runs**.
 | 50 km/h | 13.9 m | 20.8 m | 27.8 m | 34.7 m | 41.7 m |
 | 60 km/h | 16.7 m | 25.0 m | 33.3 m | 41.7 m | 50.0 m |
 
+### CCRs Matrix (50 cases/controller)
+
+| Variable | Values |
+|---|---|
+| `ego_speed_kmh` | 20, 30, 40, 50, 60 km/h |
+| `approach_d` | 30, 40, 50, 60, 70 m (centre-to-centre from ego spawn) |
+| `mu` | 0.85 (dry), 0.40 (wet) |
+
+Formula: 5 × 5 × 2 = **50 cases**. Total with 3 controllers: **150 runs**.
+
+**Domain justification:**
+- TTC at spawn spans ≈ 1.5 s (30 m + 60 km/h, hardest) to ≈ 11.8 s (70 m + 20 km/h, easiest).
+- Minimum ≥ 30 m ensures the ego has room to establish cruise speed before braking.
+- All 50 cases are conflict cases (worst: 70 m @ 20 km/h → t = 11.8 s < 20 s window).
+
+### Cut-out Matrix (50 cases/controller)
+
+| Variable | Values |
+|---|---|
+| `ego_speed_kmh` | 20, 30, 40, 50, 60 km/h |
+| `reveal_ttc` | 1.0, 1.5, 2.0, 2.5, 3.0 s (TTC to stationary target at cut-out trigger) |
+| `mu` | 0.85 (dry), 0.40 (wet) |
+| `FIXED_HEADWAY_THW` | **0.8 s** (fixed, not swept) |
+
+Formula: 5 × 5 × 2 = **50 cases**. Total with 3 controllers: **150 runs**.
+
+**Derived geometry (per case):**
+```
+headway_d        = FIXED_HEADWAY_THW × ego_ms   (= 0.8 × ego_ms)
+cutout_trigger_d = (reveal_ttc − 0.8) × ego_ms + GAP_OFFSET
+```
+
+All 50 cases have `cutout_trigger_d > 0` (min: 5.61 m at 20 km/h + reveal_ttc=1.0). Conflict is defined against the stationary target and is independent of `reveal_ttc` — all 50 cases are conflict cases (worst: 20 km/h → t = 7.9 s < 20 s window).
+
+**Tuning note:** At `reveal_ttc = 1.0`, 20 km/h: lead-to-target surface gap at trigger ≈ 1.1 m. If CARLA physics shows the lead cannot complete the lane change here, increase `GAP_OFFSET` (e.g. 5.0 m) — this shifts `cutout_trigger_d` uniformly without altering the matrix axes.
+
 ---
 
 ## 3. Conflict Case Definition (`is_conflict`)
@@ -1008,8 +1044,8 @@ Added two new test scenarios running on the `train000` 3DGS scene. All existing 
 
 | File | Purpose |
 |---|---|
-| `config/scenario_ccrs.py` | CCRs config: EGO/TARGET spawns, EXPECTED_SCENE, SPECTATOR_TF, 5×2=10 matrix |
-| `config/scenario_cutout.py` | Cut-out config: EGO/TARGET/LEAD spawns, cut-out constants, 5×5×2=50 matrix |
+| `config/scenario_ccrs.py` | CCRs config: EGO/TARGET spawns, EXPECTED_SCENE, SPECTATOR_TF, 5×3×2=30 matrix |
+| `config/scenario_cutout.py` | Cut-out config: EGO/TARGET/LEAD spawns, cut-out constants, 5×3×2=30 matrix |
 | `core/scenario_ccrs.py` | `CCRsScenario`: target always stationary (`hold()`) |
 | `core/scenario_cutout.py` | `CutOutScenario`: lead cruises → cuts right when ≤ `CUTOUT_TRIGGER_D` from target |
 | `core/runner_ccrs.py` | `CCRsRecord` + `run_case()` for CCRs |
@@ -1046,7 +1082,7 @@ t_conflict   = surface_gap / v_ego
 is_conflict  = t_conflict ≤ MAX_TICKS × FIXED_DT (20 s)
 ```
 
-All 10 CCRs and all 50 cut-out matrix cases are conflict cases (worst: 20 km/h → t ≈ 8.0 s < 20 s).
+All 30 CCRs and all 30 cut-out matrix cases are conflict cases (worst: CCRs 60m@20km/h → t ≈ 10.0 s; cut-out 20km/h → t ≈ 7.9 s; both < 20 s).
 
 #### Geometry generalisation (forward-vector lead spawn)
 
@@ -1255,3 +1291,166 @@ python3 -m py_compile core/viz.py core/actors.py core/occlusion.py \
 ```
 
 *Last updated: 2026-07-22.*
+
+---
+
+### Rev 2026-07-23 — Cut-out matrix redesign + CCRs approach-distance axis
+
+#### Cut-out: replace headway sweep with reveal_ttc
+
+**Motivation:** The old `headway_thw` sweep axis controlled how close ego was to the lead, but did not directly control the difficulty metric that matters: TTC to the stationary target at the moment it is revealed. `reveal_ttc` controls this directly.
+
+**Changes:**
+
+| What | Old | New |
+|---|---|---|
+| Matrix primary axis | `headway_thw` 5 values | `reveal_ttc` 3 values (TTC at cut-out trigger) |
+| Lead headway | swept (1.0–3.0 s) | fixed `FIXED_HEADWAY_THW = 1.5 s` |
+| `cutout_trigger_d` | single config constant | derived per case (see formula below) |
+| Cases/controller | 50 (5×5×2) | 30 (5×3×2) |
+| New CSV columns | — | `reveal_ttc`, `headway_d`, `range_at_reveal`, `ttc_at_reveal`, `time_reveal_to_brake` |
+
+**Closed-form trigger distance:** Since ego and lead cruise at the same speed until the trigger fires, the ego→target distance at the trigger tick equals `headway_d + cutout_trigger_d`. Setting this equal to `reveal_ttc × ego_ms` (desired TTC) plus `GAP_OFFSET` gives:
+
+```
+headway_d        = FIXED_HEADWAY_THW × ego_ms
+cutout_trigger_d = (reveal_ttc − FIXED_HEADWAY_THW) × ego_ms + GAP_OFFSET
+```
+
+Verified positive for all 30 cases (min: 20 km/h, reveal_ttc=1.5 s → trigger=4.5 m). *Superseded by Rev 2026-07-23b — see below.*
+
+**Diagnostic columns recorded in the CSV:**
+
+| Column | Description |
+|---|---|
+| `range_at_reveal` | Surface gap (m) at the first tick the target becomes detectable (occlusion gate opens) |
+| `ttc_at_reveal` | TTC (s) at that tick; −1 if never revealed |
+| `time_reveal_to_brake` | Elapsed time (s) from first reveal tick to brake onset; includes all perception latency. −1 if no brake onset after reveal. |
+
+These are populated in `runner_cutout.py` and summarised per controller by `core/report.py`.
+
+#### CCRs: add approach-distance axis
+
+**Motivation:** The previous 5×2=10 matrix had a fixed target position and therefore fixed TTC-at-spawn per speed. Adding `approach_d` sweeps TTC-at-spawn systematically, mirroring the Euro-NCAP spirit of varying the approach distance.
+
+**Changes:**
+
+| What | Old | New |
+|---|---|---|
+| Target position | Fixed `TARGET_SPAWN` | Computed per case: `EGO_SPAWN + approach_d × forward_vector` |
+| `approach_d` values (m) | — | 30, 45, 60 (TTC@spawn: 1.5–10 s) |
+| Cases/controller | 10 (5×2) | 30 (5×3×2) |
+| New CSV column | — | `approach_d` |
+
+**Target spawn formula:**
+```python
+yaw_rad  = math.radians(cfg.EGO_SPAWN["yaw"])        # −146.54° → forward ≈ (−0.835, −0.551)
+target_x = EGO_SPAWN["x"] + approach_d × cos(yaw_rad)
+target_y = EGO_SPAWN["y"] + approach_d × sin(yaw_rad)
+```
+Passed as `target_x`/`target_y` in the case dict; `runner_ccrs.py` uses them when present (falls back to `cfg.TARGET_SPAWN` for single-case / legacy runs).
+
+**Conflict check:** All 30 CCRs cases are conflict cases (worst: 60 m @ 20 km/h → t=10.0 s < 20 s window). *Superseded by Rev 2026-07-23b — see below.*
+
+#### Files changed
+
+| File | Change |
+|---|---|
+| `config/scenario_cutout.py` | Removed `HEADWAY_THW`, added `FIXED_HEADWAY_THW`, `REVEAL_TTC`; updated `SINGLE_CASE`, `MATRIX` |
+| `config/scenario_ccrs.py` | Added `APPROACH_DISTANCES`; updated `MATRIX` |
+| `core/runner_cutout.py` | `CutOutRecord`: removed `headway_thw`, added `reveal_ttc`, `headway_d`, 3 diagnostic fields. `run_case()`: derive `headway_d`/`cutout_trigger_d` from `reveal_ttc`; capture reveal tick + gap + TTC + brake lag |
+| `core/runner_ccrs.py` | `CCRsRecord`: added `approach_d`. `run_case()`: spawn target from per-case `target_x`/`target_y` |
+| `run_matrix_cutout.py` | `build_cases()`: iterate `ego_speed × reveal_ttc × mu`; derive `headway_d` + `cutout_trigger_d` |
+| `run_matrix_ccrs.py` | `build_cases()`: iterate `ego_speed × approach_d × mu`; compute target spawn coords |
+| `tools/check_conflict.py` | `check_ccrs()`: add `approach_d` axis, compute target position per case. `check_cutout()`: replace `HEADWAY_THW` iteration with `reveal_ttc` |
+| `core/conflict.py` | `ccrs_is_conflict()`: reads `target_x`/`target_y` from case (backward-compatible fallback) |
+| `core/report.py` | `print_summary()`: print reveal-diagnostic table when cut-out diagnostic columns present |
+
+#### Scope protection
+- Cut-in and lead-brake: no changes; byte-for-byte identical results.
+- `cutout_is_conflict()` in `conflict.py`: unchanged (uses fixed `cfg.TARGET_SPAWN`; reveal_ttc does not affect conflict).
+- All new CSV columns default to `0.0` / `−1.0`; existing analysis scripts reading old CCRs CSVs are unaffected.
+
+#### Verification (no CARLA)
+
+```bash
+python3 tools/check_conflict.py
+# Expected at that revision: cut-in 50/50, lead-brake 50/50, CCRs 30/30, cut-out 30/30 = 160 conflict
+
+python3 tests/test_occlusion_gate.py
+# Expected: 9/9 passed
+
+python3 -m py_compile core/runner_cutout.py core/runner_ccrs.py \
+    run_matrix_cutout.py run_matrix_ccrs.py tools/check_conflict.py core/report.py
+```
+
+*Last updated: 2026-07-23.*
+
+---
+
+### Rev 2026-07-23b — Cut-out 5×5×2 = 50 cases; CCRs 5×5×2 = 50 cases
+
+**Motivation:** Expand both train000 matrices to 50 cases/controller (matching cut-in and lead-brake) for consistency and finer resolution. For cut-out, finer resolution comes from adding harder `reveal_ttc` values (`reveal_ttc = 1.0 s`), not from re-introducing a headway sweep. For CCRs, two additional `approach_d` values extend TTC-at-spawn coverage toward longer reaction times.
+
+Cut-in and lead-brake results are **unchanged** (byte-for-byte identical).
+
+#### Cut-out: 5 reveal_ttc values, lower FIXED_HEADWAY_THW
+
+| What | Old (Rev 2026-07-23) | New |
+|---|---|---|
+| `REVEAL_TTC` | `[1.5, 2.0, 2.5]` s | `[1.0, 1.5, 2.0, 2.5, 3.0]` s |
+| `FIXED_HEADWAY_THW` | `1.5` s | **`0.8` s** |
+| Cases/controller | 30 (5×3×2) | **50 (5×5×2)** |
+
+**Why lower `FIXED_HEADWAY_THW` to 0.8 s?**  
+The constraint `cutout_trigger_d ≥ GAP_OFFSET > 0` requires `reveal_ttc ≥ FIXED_HEADWAY_THW`. Adding `reveal_ttc = 1.0` with the old `FIXED_HEADWAY_THW = 1.5` would give a negative trigger distance. Setting `FIXED_HEADWAY_THW = 0.8` maintains a positive lead-to-target surface gap at the hardest case: 0.2 × ego_ms ≥ 1.1 m (at 20 km/h), giving the lead clearance to begin the lane change.
+
+**Geometry verification (all 50 cases):**
+
+| Case (hardest) | `headway_d` | `cutout_trigger_d` | lead→target surf. gap |
+|---|---|---|---|
+| 20 km/h, reveal_ttc=1.0 | 4.44 m | **5.61 m** ← min | **1.11 m** |
+| 60 km/h, reveal_ttc=3.0 | 13.33 m | 41.17 m ← max | 36.67 m |
+
+All 50 `cutout_trigger_d > 0` ✓ (verified with `tools/check_conflict.py` inline geometry check).
+
+**Tuning note for CARLA:** At the hardest case (20 km/h, `reveal_ttc = 1.0`), the lead starts the cut-out with only ~1.1 m surface clearance from the target. If the lead cannot complete the lane change without clipping the target in CARLA, increase `GAP_OFFSET` in `config/scenario_cutout.py` (e.g. from 4.5 to 5.0 m). This shifts all 50 `cutout_trigger_d` values up by 0.5 m uniformly — the matrix axes (`reveal_ttc`, `ego_speed`, `mu`) are unchanged.
+
+**Conflict:** All 50 cut-out cases remain conflict cases (worst: 20 km/h → t = 7.9 s). `reveal_ttc` does not affect conflict status (formula depends only on ego speed vs ego→target distance).
+
+#### CCRs: 5 approach_d values
+
+| What | Old (Rev 2026-07-23) | New |
+|---|---|---|
+| `APPROACH_DISTANCES` | `[30, 45, 60]` m | `[30, 40, 50, 60, 70]` m |
+| Cases/controller | 30 (5×3×2) | **50 (5×5×2)** |
+| TTC-at-spawn range | 1.5–10.0 s | 1.5–11.8 s |
+
+**Domain justification:** Even 10 m steps; minimum ≥ 30 m (ego needs room to reach cruise speed); 70 m @ 20 km/h → t = 11.8 s < 20 s window (still conflict). Old values 30 and 60 are preserved.
+
+**Conflict:** All 50 CCRs cases are conflict cases (verified by `tools/check_conflict.py`).
+
+#### Files changed
+
+| File | Change |
+|---|---|
+| `config/scenario_cutout.py` | `FIXED_HEADWAY_THW` 1.5 → **0.8**; `REVEAL_TTC` 3 → **5 values**; MATRIX comment; tuning note |
+| `config/scenario_ccrs.py` | `APPROACH_DISTANCES` 3 → **5 values**; MATRIX comment |
+| `run_matrix_cutout.py` | `build_cases()` docstring: 30 → 50 |
+| `run_matrix_ccrs.py` | `build_cases()` docstring: 30 → 50 |
+| `README.md` | Matrix table; How to Run counts; check_conflict count (160 → 200) |
+| `TECHNICAL_DOC.md` | §2 CCRs + Cut-out matrix tables added; this revision entry |
+
+**No changes to:** `core/runner_cutout.py`, `core/runner_ccrs.py`, `core/conflict.py`, `tools/check_conflict.py`, `core/report.py`, any cut-in / lead-brake file. CSV schema unchanged; older CSVs still load in `report.py`.
+
+#### Verification (no CARLA)
+
+```bash
+python3 tools/check_conflict.py
+# Expected: cut-in 50/50, lead-brake 50/50, CCRs 50/50, cut-out 50/50 = 200/200 conflict
+
+python3 -m py_compile config/scenario_cutout.py config/scenario_ccrs.py \
+    run_matrix_cutout.py run_matrix_ccrs.py
+```
+
+*Last updated: 2026-07-23.*
