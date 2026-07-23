@@ -1454,3 +1454,92 @@ python3 -m py_compile config/scenario_cutout.py config/scenario_ccrs.py \
 ```
 
 *Last updated: 2026-07-23.*
+
+---
+
+### Rev 2026-07-23c — Realistic front-camera mount + aligned occlusion-gate eye-point
+
+#### Problem
+
+`CAM_FRONT_TF = dict(x=3.5, y=0.2, z=1.60, pitch=8)` placed the ego's front camera 3.5 m ahead of the actor origin (≈ 1.4 m ahead of the front bumper, floating in air) and at z = 1.60 m (≈ 1.0 m above the estimated roofline at +0.63 m). The camera looked over the top of an occluding lead vehicle, undermining the cut-out occlusion premise.
+
+Additionally, the occlusion gate in `core/runner_cutout.py` used the ego **actor origin** (x = 0) as the sight-line eye-point, while the camera sat 3.5 m forward — a 3.5 m mismatch between "what the gate calls occluded" and "what the camera can see."
+
+#### Fix
+
+**Shared camera mount constant** (all four configs, changed identically):
+
+```python
+# Old
+CAM_FRONT_TF = dict(x=3.5, y=0.2, z=1.60, pitch=8)
+
+# New
+CAM_FRONT_TF = dict(x=1.0, y=0.0, z=0.5, pitch=0)
+```
+
+| Param | Old | New | Rationale |
+|---|---|---|---|
+| x | 3.5 m | **1.0 m** | Rear-view mirror position (inside cabin, ≈ 1.1 m behind front bumper for a 4.2 m car) |
+| y | 0.2 m | **0.0 m** | Centred |
+| z | 1.60 m | **0.5 m** | ~0.13 m below estimated roofline (extent.z ≈ 0.63 m); rear-view mirror height |
+| pitch | 8° down | **0°** | Level — realistic ADAS camera attitude |
+
+> **Bounding-box note:** the exact `extent` values for the vehicle models in this CARLA build are not
+> queryable from static code. The estimates above use the well-known CARLA 0.9.x Audi TT-class
+> geometry (extent.x ≈ 2.1 m, extent.z ≈ 0.63 m, actor origin at geometric centre). Verify visually:
+> the lead vehicle's roof should occupy the lower half of the frame at close range.
+
+**Occlusion gate eye-point alignment** (`core/runner_cutout.py`):
+
+The gate call now subtracts `cfg.CAM_FRONT_TF["x"]` from both `lead_lon` and `lon` before passing
+to `sight_line_occluded`, shifting the eye-point from the ego actor origin to the camera mount:
+
+```python
+_cam_x = cfg.CAM_FRONT_TF.get("x", 0.0)
+if actors.sight_line_occluded(
+        lead_lon - _cam_x, lead_lat, lon - _cam_x, lat,
+        ...):
+    detected_now = False
+```
+
+`sight_line_occluded` is 2D (forward/right only); z and y offsets of the camera have no effect on
+the gate. After the fix the residual eye-point error is zero (old error was 3.5 m).
+
+#### Scope protection
+
+- `DETECTION_SOURCE = "groundtruth"` in all four scenarios → camera feeds YOLO/visualisation only.
+  **Moving the mount changes zero recorded metrics.** Cut-in, lead-brake, CCRs, and cut-out paper
+  results are byte-for-byte identical.
+- `core/occlusion.sight_line_occluded` is unchanged; all 9 unit tests pass.
+- Cut-in, lead-brake, CCRs runners: no change (occlusion gate is cut-out only).
+
+#### Files changed
+
+| File | Change |
+|---|---|
+| `config/scenario_cutin.py` | `CAM_FRONT_TF`: x 3.5→1.0, y 0.2→0.0, z 1.60→0.5, pitch 8→0 |
+| `config/scenario_lead_brake.py` | same |
+| `config/scenario_ccrs.py` | same |
+| `config/scenario_cutout.py` | same |
+| `core/runner_cutout.py` | Occlusion gate: subtract `_cam_x` from `lead_lon` and `lon` |
+| `README.md` | Added "Front Camera Mount" section with visual check checklist |
+| `TECHNICAL_DOC.md` | This revision entry |
+
+#### Verification (no CARLA)
+
+```bash
+python3 tests/test_occlusion_gate.py
+# Expected: 9/9 passed
+
+python3 -m py_compile config/scenario_cutin.py config/scenario_lead_brake.py \
+    config/scenario_ccrs.py config/scenario_cutout.py core/runner_cutout.py
+```
+
+#### Visual check in CARLA
+
+1. **Camera position**: the front-camera window should show the lead/target vehicle roof appearing from the **bottom of the frame** as ego closes in — the vehicle should NOT be a small object near the top of the frame that can be "looked over."
+2. **Roof clearance**: at ~5–10 m gap to the lead, the lead's roofline should be roughly at mid-frame height or lower (not near the top).
+3. **No clipping**: the camera should not be inside the vehicle mesh (no fisheye / blacked-out corners). If it is, reduce `z` to 0.4 m.
+4. **Occlusion gate (cut-out)**: run `run_single_cutout.py` with `SHOW_WINDOW=True`. The `det=False` state in the console should persist for a realistic duration while the lead is squarely in front of the target. `det=True` should switch on shortly after the lead visibly clears.
+
+*Last updated: 2026-07-23.*

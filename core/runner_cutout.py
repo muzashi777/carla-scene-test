@@ -295,8 +295,11 @@ def run_case(sess, cfg, case, controller_name, delay_frames, detector,
             if getattr(cfg, "OCCLUSION_GATE", False) and detected_now:
                 _, lead_lon, lead_lat = actors.inpath_hazard(
                     ego, lead, cfg.INPATH_MAX_RANGE + 50.0, 999.0, 0.0)
+                # Shift eye-point from ego actor origin to camera mount (x-axis only;
+                # the gate is 2D lon/lat so z and y offsets have no effect).
+                _cam_x = cfg.CAM_FRONT_TF.get("x", 0.0)
                 if actors.sight_line_occluded(
-                        lead_lon, lead_lat, lon, lat,
+                        lead_lon - _cam_x, lead_lat, lon - _cam_x, lat,
                         getattr(cfg, "OCCLUSION_LAT_CLEAR", 1.5),
                         getattr(cfg, "OCCLUSION_LON_MARGIN", 2.0)):
                     detected_now = False

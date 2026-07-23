@@ -134,6 +134,34 @@ python -m core.report results/cutout_matrix_*.csv
 
 ---
 
+## Front Camera Mount (ego, all scenarios)
+
+The ego vehicle carries a front-facing RGB camera used for YOLO visualisation and scene logging.
+**It has no effect on braking decisions** — all scenarios use `DETECTION_SOURCE="groundtruth"`.
+Moving the mount changes zero recorded metrics.
+
+`CAM_FRONT_TF` is the **single shared constant** defined identically in all four config files:
+
+| Key | Value | Physical meaning |
+|---|---|---|
+| `x` | **+1.0 m** | 1 m forward of actor origin (≈ rear-view mirror / top-of-windshield position inside the cabin) |
+| `y` | **0.0 m** | laterally centred |
+| `z` | **+0.5 m** | 0.5 m above actor origin (≈ 0.1 m below estimated roofline; rear-view mirror height) |
+| `pitch` | **0°** | level; realistic ADAS camera attitude |
+| `CAM_W × CAM_H` | 1280 × 720 | image resolution |
+| `CAM_FOV_DEG` | 90° | horizontal field of view |
+
+The **occlusion gate** in `core/runner_cutout.py` uses the same camera x-offset (1.0 m) to shift the
+sight-line eye-point from the ego actor origin to the camera mount, so what the gate considers
+"occluded" matches what the camera can actually see.
+
+> **Visual check when running in CARLA:** the lead vehicle's roof should appear in the bottom half of
+> the front-camera frame at close range (it should NOT be possible to see clearly over it). If the
+> camera appears inside the vehicle mesh, reduce `z` by 0.1–0.2 m. If it floats above the roof,
+> increase `z` is not necessary — the current value is deliberately at/just below the roofline.
+
+---
+
 ## Spectator Camera
 
 Each scenario has a pre-tuned spectator camera pose in its config (`SPECTATOR_TF`). Every run script calls `actors.set_spectator()` immediately after session open — the camera is cosmetic only and has no effect on recorded results. To disable, set `SPECTATOR_TF = None` in the config.
