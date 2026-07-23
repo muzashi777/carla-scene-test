@@ -1479,15 +1479,15 @@ CAM_FRONT_TF = dict(x=1.0, y=0.0, z=0.5, pitch=0)
 
 | Param | Old | New | Rationale |
 |---|---|---|---|
-| x | 3.5 m | **1.0 m** | Rear-view mirror position (inside cabin, ≈ 1.1 m behind front bumper for a 4.2 m car) |
+| x | 3.5 m | **2.8 m** | Bonnet/windshield-base area; confirmed live in CARLA |
 | y | 0.2 m | **0.0 m** | Centred |
-| z | 1.60 m | **0.5 m** | ~0.13 m below estimated roofline (extent.z ≈ 0.63 m); rear-view mirror height |
+| z | 1.60 m | **0.8 m** | Above bonnet surface; confirmed clears vehicle mesh → live image in CARLA |
 | pitch | 8° down | **0°** | Level — realistic ADAS camera attitude |
 
-> **Bounding-box note:** the exact `extent` values for the vehicle models in this CARLA build are not
-> queryable from static code. The estimates above use the well-known CARLA 0.9.x Audi TT-class
-> geometry (extent.x ≈ 2.1 m, extent.z ≈ 0.63 m, actor origin at geometric centre). Verify visually:
-> the lead vehicle's roof should occupy the lower half of the frame at close range.
+> **Bounding-box note:** the exact `extent` values are not queryable from static code. Estimates use
+> CARLA 0.9.x Audi TT-class geometry (extent.x ≈ 2.1 m, extent.z ≈ 0.63–0.70 m, actor origin at
+> geometric centre). If the camera renders a **black image**, the camera is still inside the solid
+> mesh — increase `z` by 0.1 m steps (e.g. 0.8 → 0.9) until the image is live.
 
 **Occlusion gate eye-point alignment** (`core/runner_cutout.py`):
 

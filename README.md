@@ -144,9 +144,9 @@ Moving the mount changes zero recorded metrics.
 
 | Key | Value | Physical meaning |
 |---|---|---|
-| `x` | **+1.0 m** | 1 m forward of actor origin (≈ rear-view mirror / top-of-windshield position inside the cabin) |
+| `x` | **+2.8 m** | 2.8 m forward of actor origin (bonnet/windshield-base area; confirmed live in CARLA) |
 | `y` | **0.0 m** | laterally centred |
-| `z` | **+0.5 m** | 0.5 m above actor origin (≈ 0.1 m below estimated roofline; rear-view mirror height) |
+| `z` | **+0.8 m** | 0.8 m above actor origin (above bonnet surface, clears vehicle mesh; confirmed live in CARLA) |
 | `pitch` | **0°** | level; realistic ADAS camera attitude |
 | `CAM_W × CAM_H` | 1280 × 720 | image resolution |
 | `CAM_FOV_DEG` | 90° | horizontal field of view |
@@ -155,10 +155,10 @@ The **occlusion gate** in `core/runner_cutout.py` uses the same camera x-offset 
 sight-line eye-point from the ego actor origin to the camera mount, so what the gate considers
 "occluded" matches what the camera can actually see.
 
-> **Visual check when running in CARLA:** the lead vehicle's roof should appear in the bottom half of
-> the front-camera frame at close range (it should NOT be possible to see clearly over it). If the
-> camera appears inside the vehicle mesh, reduce `z` by 0.1–0.2 m. If it floats above the roof,
-> increase `z` is not necessary — the current value is deliberately at/just below the roofline.
+> **Visual check when running in CARLA:** the image should be live (not black). If the frame is black,
+> the camera is still inside the vehicle mesh — increase `z` by 0.1 m steps until the image appears.
+> At close range to the lead, the lead's roofline should appear near the bottom of the frame, not the
+> top — confirming the camera cannot "see over" the occluding vehicle.
 
 ---
 

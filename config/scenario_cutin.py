@@ -37,7 +37,7 @@ DART_STOP_X = 3.5         # dart reaches this x (centre of ego's lane) then brak
 
 # ── Cameras ───────────────────────────────────────────────────────────
 CAM_W, CAM_H = 1280, 720
-CAM_FRONT_TF = dict(x=1.0, y=0.0, z=0.5, pitch=0)              # front camera: rear-view mirror / top-of-windshield position
+CAM_FRONT_TF = dict(x=2.8, y=0.0, z=0.8, pitch=0)              # front camera: bonnet/windshield-base area, confirmed live in CARLA
 CAM_TOP_TF   = dict(x=-2.0, y=-6.0, z=3.5, pitch=-15, yaw=45)  # top-view camera (display only)
 # Pinhole parameter reserved for future use (currently distance uses ground-truth, this value is unused)
 CAM_FOV_DEG = 90.0
