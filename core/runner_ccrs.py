@@ -122,6 +122,7 @@ def run_case(sess, cfg, case, controller_name, delay_frames, detector,
         #   • try_spawn_actor returns None      → CARLA overlap rejection
         # Never spawns a vehicle on a suspect surface and lets physics move it.
         _surf_z_max = getattr(cfg, "SPAWN_SURFACE_Z_MAX", 2.0)
+        _surf_z_min = getattr(cfg, "SPAWN_SURFACE_Z_MIN", -1.0)
         _z_offset   = getattr(cfg, "SPAWN_Z_OFFSET", 0.5)
         _case_label = (f"ego{case['ego_speed_kmh']:.0f}_"
                        f"ad{case.get('approach_d', '?')}_"
@@ -131,7 +132,9 @@ def run_case(sess, cfg, case, controller_name, delay_frames, detector,
         if _proj_z is None:
             # cast_ray unavailable or hit nothing — fall back to config z
             _spawn_z = target_spawn["z"]
+            _proj_str = "n/a"; _dz_str = "n/a"
         elif _proj_z > _surf_z_max:
+            # Ray hit a baked obstacle roof — hard block
             print(f"[SPAWN][CCRS] case={_case_label}  "
                   f"req=({target_spawn['x']:.3f},{target_spawn['y']:.3f},"
                   f"z_nom={target_spawn['z']:.3f})  surf_z={_proj_z:.3f}  "
@@ -144,13 +147,26 @@ def run_case(sess, cfg, case, controller_name, delay_frames, detector,
                   f"then replace approach_d={case.get('approach_d', '?')} in APPROACH_DISTANCES.")
             rec.result_txt = "SPAWN_BLOCKED"
             return rec, None
+        elif _proj_z < _surf_z_min:
+            # Ray hit underground mesh (road underside, subsurface geometry, etc.)
+            # instead of the road surface — fall back to config z which was hand-verified.
+            print(f"[SPAWN][CCRS] case={_case_label}  "
+                  f"req=({target_spawn['x']:.3f},{target_spawn['y']:.3f},"
+                  f"z_nom={target_spawn['z']:.3f})  surf_z={_proj_z:.3f}  "
+                  f"dz={_proj_z - target_spawn['z']:+.3f}  blocked=N  "
+                  f"status=UNDERGROUND_HIT(fallback)  final=pending")
+            print(f"[SPAWN] underground hit surf_z={_proj_z:.3f} < "
+                  f"SPAWN_SURFACE_Z_MIN={_surf_z_min:.2f} at "
+                  f"({target_spawn['x']:.3f},{target_spawn['y']:.3f}) — "
+                  f"using config z_nom={target_spawn['z']:.3f}")
+            _spawn_z = target_spawn["z"]
+            _proj_str = f"{_proj_z:.3f}(underground)"; _dz_str = "n/a(fallback)"
         else:
             _spawn_z = _proj_z + _z_offset
+            _proj_str = f"{_proj_z:.3f}"
+            _dz_str   = f"{_proj_z - target_spawn['z']:+.3f}"
 
         target = actors.spawn_vehicle(world, **dict(target_spawn, z=_spawn_z))
-        _proj_str = f"{_proj_z:.3f}" if _proj_z is not None else "n/a"
-        _dz_str   = (f"{_proj_z - target_spawn['z']:+.3f}"
-                     if _proj_z is not None else "n/a")
         if not target:
             print(f"[SPAWN][CCRS] case={_case_label}  "
                   f"req=({target_spawn['x']:.3f},{target_spawn['y']:.3f},"
@@ -163,23 +179,32 @@ def run_case(sess, cfg, case, controller_name, delay_frames, detector,
             rec.result_txt = "SPAWN_BLOCKED"
             return rec, None
         _final_loc = target.get_location()
+        # Guard: x,y must not drift — ground projection only changes z.
+        # CARLA sometimes returns a non-None actor placed at (0,0,0) when spawn z is
+        # underground/invalid; the location check catches this and skips the case.
+        _XY_TOL = 0.1  # m
+        _xy_ok = (abs(_final_loc.x - target_spawn["x"]) <= _XY_TOL
+                  and abs(_final_loc.y - target_spawn["y"]) <= _XY_TOL)
         print(f"[SPAWN][CCRS] case={_case_label}  "
               f"req=({target_spawn['x']:.3f},{target_spawn['y']:.3f},"
               f"z_nom={target_spawn['z']:.3f})  surf_z={_proj_str}  "
-              f"dz={_dz_str}  blocked=N  status=OK  "
+              f"dz={_dz_str}  blocked={'N' if _xy_ok else 'Y'}  "
+              f"status={'OK' if _xy_ok else 'BLOCKED(drift)'}  "
               f"final=({_final_loc.x:.3f},{_final_loc.y:.3f},{_final_loc.z:.3f})")
-        # Ground projection must only adjust z — assert x,y are within tolerance
-        _XY_TOL = 0.1  # m; CARLA places actors at the exact requested transform
-        if (abs(_final_loc.x - target_spawn["x"]) > _XY_TOL
-                or abs(_final_loc.y - target_spawn["y"]) > _XY_TOL):
-            raise RuntimeError(
-                f"[SPAWN] x,y drift detected on TARGET! "
-                f"Requested ({target_spawn['x']:.3f},{target_spawn['y']:.3f}) "
-                f"but actor landed at ({_final_loc.x:.3f},{_final_loc.y:.3f}). "
-                f"dx={_final_loc.x - target_spawn['x']:+.3f} "
-                f"dy={_final_loc.y - target_spawn['y']:+.3f} m — "
-                f"ground projection must only change z."
-            )
+        if not _xy_ok:
+            print(f"[SPAWN] BLOCKED: TARGET x,y drift "
+                  f"({target_spawn['x']:.3f},{target_spawn['y']:.3f}) → "
+                  f"({_final_loc.x:.3f},{_final_loc.y:.3f}) "
+                  f"dx={_final_loc.x - target_spawn['x']:+.3f} "
+                  f"dy={_final_loc.y - target_spawn['y']:+.3f} m. "
+                  f"Likely bad spawn_z={_spawn_z:.3f} (underground) — "
+                  f"add SPAWN_SURFACE_Z_MIN to config or probe the coordinate.")
+            try:
+                target.destroy()
+            except Exception:
+                pass
+            rec.result_txt = "SPAWN_BLOCKED"
+            return rec, None
         actor_list.append(target)
         target.apply_control(carla.VehicleControl(brake=1.0, hand_brake=True))
 

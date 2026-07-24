@@ -167,6 +167,7 @@ def run_case(sess, cfg, case, controller_name, delay_frames, detector,
         # (assertion below enforces this).  Hard-fails (SPAWN_BLOCKED) if the
         # projected surface is above SPAWN_SURFACE_Z_MAX or CARLA rejects the spawn.
         _surf_z_max  = getattr(cfg, "SPAWN_SURFACE_Z_MAX", 2.0)
+        _surf_z_min  = getattr(cfg, "SPAWN_SURFACE_Z_MIN", -1.0)
         _z_offset    = getattr(cfg, "SPAWN_Z_OFFSET", 0.5)
         _lead_z_nom  = cfg.LEAD_SPAWN["z"]
         _co_case_label = (f"ego{case['ego_speed_kmh']:.0f}_"
@@ -176,7 +177,9 @@ def run_case(sess, cfg, case, controller_name, delay_frames, detector,
 
         if _lead_proj_z is None:
             _lead_z = _lead_z_nom
+            _lproj_str = "n/a"; _ldz_str = "n/a"
         elif _lead_proj_z > _surf_z_max:
+            # Ray hit a baked obstacle roof — hard block
             print(f"[SPAWN][CUTOUT] case={_co_case_label}  "
                   f"req=({lead_x:.3f},{lead_y:.3f},z_nom={_lead_z_nom:.3f})  "
                   f"surf_z={_lead_proj_z:.3f}  "
@@ -189,16 +192,27 @@ def run_case(sess, cfg, case, controller_name, delay_frames, detector,
             print(f"[SPAWN]   Run tools/probe_spawn_points.py to find a clear coordinate.")
             rec.result_txt = "SPAWN_BLOCKED"
             return rec, None
+        elif _lead_proj_z < _surf_z_min:
+            # Ray hit underground mesh — fall back to config z
+            print(f"[SPAWN][CUTOUT] case={_co_case_label}  "
+                  f"req=({lead_x:.3f},{lead_y:.3f},z_nom={_lead_z_nom:.3f})  "
+                  f"surf_z={_lead_proj_z:.3f}  "
+                  f"dz={_lead_proj_z - _lead_z_nom:+.3f}  blocked=N  "
+                  f"status=UNDERGROUND_HIT(fallback)  final=pending")
+            print(f"[SPAWN] underground hit surf_z={_lead_proj_z:.3f} < "
+                  f"SPAWN_SURFACE_Z_MIN={_surf_z_min:.2f} at "
+                  f"({lead_x:.3f},{lead_y:.3f}) — using config z_nom={_lead_z_nom:.3f}")
+            _lead_z = _lead_z_nom
+            _lproj_str = f"{_lead_proj_z:.3f}(underground)"; _ldz_str = "n/a(fallback)"
         else:
             _lead_z = _lead_proj_z + _z_offset
+            _lproj_str = f"{_lead_proj_z:.3f}"
+            _ldz_str   = f"{_lead_proj_z - _lead_z_nom:+.3f}"
 
         lead = actors.spawn_vehicle(
             world, x=lead_x, y=lead_y,
             z=_lead_z, yaw=cfg.LEAD_SPAWN["yaw"],
             model=cfg.LEAD_SPAWN["model"])
-        _lproj_str = f"{_lead_proj_z:.3f}" if _lead_proj_z is not None else "n/a"
-        _ldz_str   = (f"{_lead_proj_z - _lead_z_nom:+.3f}"
-                      if _lead_proj_z is not None else "n/a")
         if not lead:
             print(f"[SPAWN][CUTOUT] case={_co_case_label}  "
                   f"req=({lead_x:.3f},{lead_y:.3f},z_nom={_lead_z_nom:.3f})  "
@@ -211,22 +225,32 @@ def run_case(sess, cfg, case, controller_name, delay_frames, detector,
             rec.result_txt = "SPAWN_BLOCKED"
             return rec, None
         _lead_final = lead.get_location()
+        # Guard: x,y must not drift — ground projection only changes z.
+        # CARLA sometimes returns a non-None actor at (0,0,0) when spawn z is
+        # underground/invalid; the location check catches this and skips the case.
+        _XY_TOL = 0.1  # m
+        _lead_xy_ok = (abs(_lead_final.x - lead_x) <= _XY_TOL
+                       and abs(_lead_final.y - lead_y) <= _XY_TOL)
         print(f"[SPAWN][CUTOUT] case={_co_case_label}  "
               f"req=({lead_x:.3f},{lead_y:.3f},z_nom={_lead_z_nom:.3f})  "
-              f"surf_z={_lproj_str}  dz={_ldz_str}  blocked=N  status=OK  "
+              f"surf_z={_lproj_str}  dz={_ldz_str}  "
+              f"blocked={'N' if _lead_xy_ok else 'Y'}  "
+              f"status={'OK' if _lead_xy_ok else 'BLOCKED(drift)'}  "
               f"final=({_lead_final.x:.3f},{_lead_final.y:.3f},{_lead_final.z:.3f})")
-        # Ground projection must only adjust z — assert x,y are within tolerance
-        _XY_TOL = 0.1  # m
-        if (abs(_lead_final.x - lead_x) > _XY_TOL
-                or abs(_lead_final.y - lead_y) > _XY_TOL):
-            raise RuntimeError(
-                f"[SPAWN] x,y drift detected on LEAD! "
-                f"Requested ({lead_x:.3f},{lead_y:.3f}) "
-                f"but actor landed at ({_lead_final.x:.3f},{_lead_final.y:.3f}). "
-                f"dx={_lead_final.x - lead_x:+.3f} "
-                f"dy={_lead_final.y - lead_y:+.3f} m — "
-                f"ground projection must only change z."
-            )
+        if not _lead_xy_ok:
+            print(f"[SPAWN] BLOCKED: LEAD x,y drift "
+                  f"({lead_x:.3f},{lead_y:.3f}) → "
+                  f"({_lead_final.x:.3f},{_lead_final.y:.3f}) "
+                  f"dx={_lead_final.x - lead_x:+.3f} "
+                  f"dy={_lead_final.y - lead_y:+.3f} m. "
+                  f"Likely bad spawn_z={_lead_z:.3f} (underground) — "
+                  f"add SPAWN_SURFACE_Z_MIN to config or probe the coordinate.")
+            try:
+                lead.destroy()
+            except Exception:
+                pass
+            rec.result_txt = "SPAWN_BLOCKED"
+            return rec, None
         actor_list.append(lead)
         lead.apply_control(carla.VehicleControl(brake=1.0, hand_brake=True))
         print(f"[LEAD] headway_d={headway_d:.1f}m → spawn ({lead_x:.3f},{lead_y:.3f},z={_lead_z:.3f})")

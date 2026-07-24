@@ -133,7 +133,8 @@ MIN_TRIGGER_SURF_GAP_M = 1.0  # m
 #   ensures the lead stops at <59 m from ego for all speeds ≤ 60 km/h.
 #   Has no effect for 20–40 km/h (those cells naturally stop in <14 m from trigger).
 #   Set to None to disable.
-SPAWN_SURFACE_Z_MAX = 2.0   # m world-z
+SPAWN_SURFACE_Z_MAX = 2.0   # m world-z — above this = baked obstacle roof → SPAWN_BLOCKED
+SPAWN_SURFACE_Z_MIN = -1.0  # m world-z — below this = underground mesh hit → fall back to config z
 SPAWN_Z_OFFSET      = 0.5   # m above ground surface for vehicle spawn centre
 CUTOUT_STOP_MAX_M   = 18.0  # m from trigger point; None = unlimited
 
