@@ -347,3 +347,45 @@ Results are written to `results/`:
 Key CSV columns: `label`, `controller`, `ego_speed_kmh`, `mu`, `avoided`, `s_clearance` (surface gap, m), `a_b_mfdd` (MFDD, m/s²), `t_c_warn` (TTC at brake onset, s), `dv_speed_var` (Δv, km/h), `is_conflict`, `peak_decel`, `a_max`. Latency-compensation runs add `comp_source` (`""`/`oracle`/`mismatched`) and `comp_L_frames` (the L actually used to compensate, in frames — may differ from `delay_frames` under `mismatched`). These columns default empty/0, so older CSVs still load in `report.py`.
 
 Run `python core/report.py results/*.csv` for a per-controller CPEIM summary table.
+
+`result_txt = "SPAWN_BLOCKED"` rows in the CSV indicate cases where the spawn was hard-blocked (see §Spawn Safety below). Filter them out before computing conflict-rate statistics.
+
+---
+
+## Spawn Safety (train000 scenarios)
+
+Both `runner_ccrs.py` and `runner_cutout.py` use `actors.ground_projection_z()` to find the road-surface z at the target/lead spawn coordinate before spawning. **The runner now hard-fails** instead of warning-and-proceeding whenever the surface is suspect.
+
+### Failure modes → `SPAWN_BLOCKED`
+
+| Trigger | Meaning | Action |
+|---|---|---|
+| `surface_z > SPAWN_SURFACE_Z_MAX` | Ray hit a baked obstacle roof (not road) | Replace the coordinate via probe |
+| `try_spawn_actor` returns `None` | CARLA rejected spawn due to bounding-box overlap | Same |
+
+In both cases `result_txt = "SPAWN_BLOCKED"` is written to the CSV and the run is skipped. **No vehicle is ever placed on a suspect surface** — a bad coordinate cannot silently relocate during the settle ticks.
+
+### `[SPAWN]` diagnostic log format
+
+Every train000 TARGET (CCRs) and LEAD (cut-out) spawn emits one line:
+
+```
+[SPAWN][CCRS]   case=ego30_ad60_mu0.85  req=(-43.636,-32.741,z_nom=0.250)  surf_z=1.823  dz=+1.573  blocked=Y  status=BLOCKED  final=n/a
+[SPAWN][CCRS]   case=ego30_ad40_mu0.85  req=(-27.817,-21.718,z_nom=0.250)  surf_z=0.122  dz=-0.128  blocked=N  status=OK  final=(-27.817,-21.718,0.622)
+[SPAWN][CUTOUT] case=ego30_ttc2.0_mu0.85  req=(...)  surf_z=...  dz=...  blocked=N  status=OK  final=(...)
+```
+
+**Reading the log:**
+- `blocked=N  status=OK` → spawn succeeded; `final=(x,y,z)` confirms the actor's actual location. `x,y` must match `req x,y` (within 0.1 m) — an assertion raises `RuntimeError` if they do not.
+- `blocked=Y  status=BLOCKED` → run skipped; the exact coordinate and `approach_d` / `headway_d` are named. Run `tools/probe_spawn_points.py` in CARLA to find a clear replacement coordinate, then update `APPROACH_DISTANCES` in `config/scenario_ccrs.py`.
+- `dz` is the vertical delta between the projected surface and the config nominal z. A large positive `dz` confirms an elevated obstacle.
+
+### Known blocked coordinate
+
+`approach_d = 60.0 m` in the CCRs matrix maps to `(-43.636, -32.741)` in train000, where a baked static vehicle sits in the 3DGS collision mesh. All 10 cells at 60 m will produce `SPAWN_BLOCKED`. Run `tools/probe_spawn_points.py` with CARLA loaded to probe 58 m and 62 m, then replace `60.0` in `APPROACH_DISTANCES` with whichever value the probe confirms is on clear road. **Do not pick a value without visual verification.**
+
+### x,y-unchanged invariant
+
+Ground projection **only modifies z**. A `RuntimeError` is raised immediately if CARLA places the actor more than 0.1 m horizontally from the requested coordinate. This guards against any future code change that accidentally introduces horizontal drift.
+
+---

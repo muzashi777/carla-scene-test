@@ -114,39 +114,72 @@ def run_case(sess, cfg, case, controller_name, delay_frames, detector,
             target_spawn["x"] = case["target_x"]
             target_spawn["y"] = case["target_y"]
 
-        # Ground-projection spawn: find the actual scene surface z at (x,y) via
-        # world.cast_ray(), then place the vehicle at surface_z + SPAWN_Z_OFFSET.
-        # Fails loudly if CARLA rejects the spawn — no silent relocation.
-        # If cast_ray returns z above SPAWN_SURFACE_Z_MAX the coordinate likely
-        # sits on a baked obstacle; this is printed as a warning before the spawn
-        # attempt so the failure message is self-explanatory.
+        # Ground-projection spawn: cast a vertical ray at (x,y) to find road-surface z,
+        # then place the vehicle at surface_z + SPAWN_Z_OFFSET.  Only z is changed —
+        # x,y are never modified (assertion below enforces this).
+        # Hard-fails (SPAWN_BLOCKED) instead of warn-and-proceed when:
+        #   • surface_z > SPAWN_SURFACE_Z_MAX  → baked obstacle roof, not road
+        #   • try_spawn_actor returns None      → CARLA overlap rejection
+        # Never spawns a vehicle on a suspect surface and lets physics move it.
         _surf_z_max = getattr(cfg, "SPAWN_SURFACE_Z_MAX", 2.0)
         _z_offset   = getattr(cfg, "SPAWN_Z_OFFSET", 0.5)
+        _case_label = (f"ego{case['ego_speed_kmh']:.0f}_"
+                       f"ad{case.get('approach_d', '?')}_"
+                       f"mu{case['mu']}")
         _proj_z = actors.ground_projection_z(world, target_spawn["x"], target_spawn["y"])
+
         if _proj_z is None:
+            # cast_ray unavailable or hit nothing — fall back to config z
             _spawn_z = target_spawn["z"]
-            print(f"[SPAWN] ground_projection_z found no surface at "
-                  f"({target_spawn['x']:.2f},{target_spawn['y']:.2f}) "
-                  f"— cast_ray returned nothing; falling back to config z={_spawn_z:.2f}")
+        elif _proj_z > _surf_z_max:
+            print(f"[SPAWN][CCRS] case={_case_label}  "
+                  f"req=({target_spawn['x']:.3f},{target_spawn['y']:.3f},"
+                  f"z_nom={target_spawn['z']:.3f})  surf_z={_proj_z:.3f}  "
+                  f"dz={_proj_z - target_spawn['z']:+.3f}  blocked=Y  "
+                  f"status=BLOCKED  final=n/a")
+            print(f"[SPAWN] BLOCKED at ({target_spawn['x']:.3f},{target_spawn['y']:.3f}): "
+                  f"surface z={_proj_z:.3f} exceeds SPAWN_SURFACE_Z_MAX={_surf_z_max:.2f} "
+                  f"— baked 3DGS obstacle at approach_d={case.get('approach_d', '?')}m.")
+            print(f"[SPAWN]   Run tools/probe_spawn_points.py to find a clear road coordinate, "
+                  f"then replace approach_d={case.get('approach_d', '?')} in APPROACH_DISTANCES.")
+            rec.result_txt = "SPAWN_BLOCKED"
+            return rec, None
         else:
-            if _proj_z > _surf_z_max:
-                print(f"[SPAWN] WARNING: surface at "
-                      f"({target_spawn['x']:.2f},{target_spawn['y']:.2f}) "
-                      f"is z={_proj_z:.2f} > SPAWN_SURFACE_Z_MAX={_surf_z_max:.2f} — "
-                      f"likely a baked obstacle at approach_d={case.get('approach_d','?')}m. "
-                      f"Choose a clear road coordinate.")
             _spawn_z = _proj_z + _z_offset
 
         target = actors.spawn_vehicle(world, **dict(target_spawn, z=_spawn_z))
+        _proj_str = f"{_proj_z:.3f}" if _proj_z is not None else "n/a"
+        _dz_str   = (f"{_proj_z - target_spawn['z']:+.3f}"
+                     if _proj_z is not None else "n/a")
         if not target:
-            _proj_str = f"{_proj_z:.2f}" if _proj_z is not None else "n/a"
-            print(f"[SPAWN] BLOCKED: CARLA rejected TARGET at "
-                  f"({target_spawn['x']:.2f},{target_spawn['y']:.2f},z={_spawn_z:.2f}) "
-                  f"[proj_z={_proj_str}]. "
-                  f"A baked scene obstacle is likely at "
-                  f"approach_d={case.get('approach_d','?')}m. "
-                  f"Run tools/probe_spawn_points.py to find a clear coordinate.")
-            rec.result_txt = "TARGET spawn failed"; return rec, None
+            print(f"[SPAWN][CCRS] case={_case_label}  "
+                  f"req=({target_spawn['x']:.3f},{target_spawn['y']:.3f},"
+                  f"z_nom={target_spawn['z']:.3f})  surf_z={_proj_str}  "
+                  f"dz={_dz_str}  blocked=Y  status=BLOCKED(overlap)  final=n/a")
+            print(f"[SPAWN] BLOCKED at ({target_spawn['x']:.3f},{target_spawn['y']:.3f}): "
+                  f"CARLA rejected TARGET (overlap) z={_spawn_z:.3f} [proj_z={_proj_str}] "
+                  f"approach_d={case.get('approach_d', '?')}m.")
+            print(f"[SPAWN]   Run tools/probe_spawn_points.py to find a clear coordinate.")
+            rec.result_txt = "SPAWN_BLOCKED"
+            return rec, None
+        _final_loc = target.get_location()
+        print(f"[SPAWN][CCRS] case={_case_label}  "
+              f"req=({target_spawn['x']:.3f},{target_spawn['y']:.3f},"
+              f"z_nom={target_spawn['z']:.3f})  surf_z={_proj_str}  "
+              f"dz={_dz_str}  blocked=N  status=OK  "
+              f"final=({_final_loc.x:.3f},{_final_loc.y:.3f},{_final_loc.z:.3f})")
+        # Ground projection must only adjust z — assert x,y are within tolerance
+        _XY_TOL = 0.1  # m; CARLA places actors at the exact requested transform
+        if (abs(_final_loc.x - target_spawn["x"]) > _XY_TOL
+                or abs(_final_loc.y - target_spawn["y"]) > _XY_TOL):
+            raise RuntimeError(
+                f"[SPAWN] x,y drift detected on TARGET! "
+                f"Requested ({target_spawn['x']:.3f},{target_spawn['y']:.3f}) "
+                f"but actor landed at ({_final_loc.x:.3f},{_final_loc.y:.3f}). "
+                f"dx={_final_loc.x - target_spawn['x']:+.3f} "
+                f"dy={_final_loc.y - target_spawn['y']:+.3f} m — "
+                f"ground projection must only change z."
+            )
         actor_list.append(target)
         target.apply_control(carla.VehicleControl(brake=1.0, hand_brake=True))
 

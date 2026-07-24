@@ -1629,3 +1629,57 @@ python3 -m py_compile config/scenario_cutin.py config/scenario_lead_brake.py \
    - Console shows `[SPAWN] BLOCKED ...` for any coordinate still on the baked obstacle
 
 *Last updated: 2026-07-23.*
+
+---
+
+### Spawn Hardening — July 2026 (Round 3: warn→hard-block + diagnostic log)
+
+**Problem:** Round 2 added `ground_projection_z` but left the `_proj_z > SPAWN_SURFACE_Z_MAX` path as a **warning-only**: the code printed `[SPAWN] WARNING:` and then still spawned at the suspect z. A vehicle placed on a baked-obstacle roof gets pushed sideways by CARLA's physics during the 20 settle ticks — the observed "CCRS target visibly relocates" during actual runs. The `try_spawn_actor → None` path was already loud (hard fail with `result_txt = "TARGET spawn failed"`), but the surface-z check was not.
+
+**Root cause of run-time target shift:**
+1. `approach_d = 60.0` in `APPROACH_DISTANCES` maps to `(-43.636, -32.741)` — the baked static vehicle.
+2. `ground_projection_z` returns the baked car's roof z (≈ 1.5–2.0 m). The value may be ≤ `SPAWN_SURFACE_Z_MAX = 2.0`, so the existing `if _proj_z > _surf_z_max` guard may not even fire. When it does fire, the code only warned and then spawned at `roof_z + 0.5 m`.
+3. CARLA accepts the spawn (vehicle sitting on top of baked car). During `SETTLE_TICKS = 20`, physics pushes the vehicle off the side → visible relocation.
+
+**Fix:**
+- `_proj_z > SPAWN_SURFACE_Z_MAX` → **hard abort** (returns `SPAWN_BLOCKED`, no spawn attempted).
+- `try_spawn_actor → None` → **hard abort** (already was, now uses uniform `SPAWN_BLOCKED` result_txt for both failure modes).
+- One structured `[SPAWN][CCRS]` / `[SPAWN][CUTOUT]` diagnostic line emitted for every TARGET / LEAD spawn attempt (success and failure) — see §Spawn Safety in README.
+- After a successful spawn, `target.get_location().x,y` are asserted within 0.1 m of the requested `x,y`. A `RuntimeError` is raised immediately if drift is detected. Ground projection may only change z.
+- x,y of the spawn transform are **never modified** by the ground-projection path. `dict(target_spawn, z=_spawn_z)` overrides only z; the assertion makes this machine-verifiable.
+
+**Result-txt values after this round:**
+
+| `result_txt` | Meaning |
+|---|---|
+| `SPAWN_BLOCKED` | Hard-blocked before or during spawn (surface z too high, or CARLA overlap). Probe and fix coordinate. |
+| `SCENARIO_INFEASIBLE` | Cut-out cell where the lead cannot complete the manoeuvre (headway clamp Round 1). |
+| `AVOIDED` / `COLLISION` / `NO BRAKE / passed` | Normal run outcomes. |
+
+**Modified files (Round 3):**
+
+| File | Change |
+|---|---|
+| `core/runner_ccrs.py` | TARGET spawn: `_proj_z > _surf_z_max` → hard-fail `SPAWN_BLOCKED` (was warn-and-spawn). Structured `[SPAWN][CCRS]` diagnostic log every spawn. x,y assertion after successful spawn. Unified result_txt `"SPAWN_BLOCKED"` for both failure modes. |
+| `core/runner_cutout.py` | LEAD spawn: same hard-fail and diagnostic log. Unified `"SPAWN_BLOCKED"`. |
+| `README.md` | New §Spawn Safety section: log format, BLOCKED/OK example lines, known blocked coordinate, x,y invariant. |
+
+**Untouched:** `runner.py`, `runner_lead_brake.py`, all scene03_2 spawns, `conflict.py`, `metrics.py`, CSV schema, matrix dimensions (still 5×5×2=50).
+
+#### How to read the console log after this round
+
+OK line (inspect that x,y match req, and final.z = surf_z + 0.5):
+```
+[SPAWN][CCRS] case=ego30_ad40_mu0.85  req=(-27.817,-21.718,z_nom=0.250)  surf_z=0.122  dz=-0.128  blocked=N  status=OK  final=(-27.817,-21.718,0.622)
+```
+
+BLOCKED line (note the exact coordinate and approach_d to fix):
+```
+[SPAWN][CCRS] case=ego30_ad60_mu0.85  req=(-43.636,-32.741,z_nom=0.250)  surf_z=1.823  dz=+1.573  blocked=Y  status=BLOCKED  final=n/a
+[SPAWN] BLOCKED at (-43.636,-32.741): surface z=1.823 exceeds SPAWN_SURFACE_Z_MAX=2.00 — baked 3DGS obstacle at approach_d=60m.
+[SPAWN]   Run tools/probe_spawn_points.py to find a clear road coordinate, then replace approach_d=60 in APPROACH_DISTANCES.
+```
+
+Any BLOCKED line tells you exactly which case and coordinate to probe. Fix it by running `tools/probe_spawn_points.py` in CARLA, confirm 58 m or 62 m is clear, then replace `60.0` in `config/scenario_ccrs.py:APPROACH_DISTANCES`.
+
+*Last updated: 2026-07-24.*
