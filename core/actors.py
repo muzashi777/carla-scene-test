@@ -141,10 +141,53 @@ def spawn_vehicle(world, x, y, z, yaw, model="vehicle.*"):
 _SPAWN_XY_TOL = 0.1  # m — max allowed x,y drift after spawn
 
 
-def spawn_ground_projected(world, x, y, z_nom, yaw, cfg, label="", model="vehicle.*"):
-    """Unified ground-projected vehicle spawn used by runner_ccrs, runner_cutout, and probe_spawn_points.
+def spawn_fixed_road_z(world, x, y, road_z, yaw, label="", model="vehicle.*"):
+    """Spawn a vehicle at a known fixed road surface z — no cast_ray.
 
-    Ensures 'CLEAR in probe' == 'spawns OK in runner' — no divergent copies.
+    Used for train000 where world.cast_ray() is unreliable: the 3DGS collision
+    mesh returns inconsistent surface z values across runs for the same (x,y)
+    (anywhere from −1.97 to −0.57), making any absolute threshold unworkable.
+
+    Spawn centre at road_z + 1.0 m so the vehicle sits clearly above the road
+    surface regardless of the vehicle's bounding-box extent (Audi TT extent.z
+    ≈ 0.75 m → bottom at road_z + 0.25 m; physics settles it onto the road).
+
+    Obstacle gate: world.try_spawn_actor overlap is the ONLY test.  A baked
+    vehicle at the spawn position causes CARLA to reject the spawn (returns None)
+    → status "BLOCKED(overlap)".
+
+    Returns (actor_or_None, status_str) with the same contract as
+    spawn_ground_projected.  Always prints one [SPAWN] log line.
+    """
+    spawn_z = road_z + 1.0
+    actor = spawn_vehicle(world, x=x, y=y, z=spawn_z, yaw=yaw, model=model)
+    if actor is None:
+        print(f"[SPAWN] {label}  req=({x:.3f},{y:.3f})  road_z={road_z:.3f}  "
+              f"blocked=Y  status=BLOCKED(overlap)  final=n/a")
+        return None, "BLOCKED: CARLA overlap-rejected (baked obstacle at this location)"
+
+    loc = actor.get_location()
+    xy_ok = abs(loc.x - x) <= _SPAWN_XY_TOL and abs(loc.y - y) <= _SPAWN_XY_TOL
+    print(f"[SPAWN] {label}  req=({x:.3f},{y:.3f})  road_z={road_z:.3f}  "
+          f"blocked={'N' if xy_ok else 'Y'}  "
+          f"status={'OK' if xy_ok else 'BLOCKED(drift)'}  "
+          f"final=({loc.x:.3f},{loc.y:.3f},{loc.z:.3f})")
+    if not xy_ok:
+        try:
+            actor.destroy()
+        except Exception:
+            pass
+        return None, (f"BLOCKED: x,y drifted ({x:.3f},{y:.3f}) → ({loc.x:.3f},{loc.y:.3f}); "
+                      f"spawn_z={spawn_z:.3f} may be underground or inside obstacle")
+
+    return actor, "OK"
+
+
+def spawn_ground_projected(world, x, y, z_nom, yaw, cfg, label="", model="vehicle.*"):
+    """Ground-projected vehicle spawn via cast_ray — for scenes with reliable collision meshes.
+
+    NOT used for train000: cast_ray is unreliable on the 3DGS mesh (returns
+    inconsistent surface z).  Use spawn_fixed_road_z() for train000 instead.
 
     Steps:
       1. Cast a downward ray to find the road-surface z.
@@ -157,11 +200,6 @@ def spawn_ground_projected(world, x, y, z_nom, yaw, cfg, label="", model="vehicl
       status_str == "OK"  → actor is valid and in place.
       status_str starts with "BLOCKED" → actor is None, reason appended.
     Always prints one [SPAWN] log line.
-
-    Scene note (train000): road sits at z ≈ −1.95 m.  SPAWN_SURFACE_Z_MAX in config is set
-    relative to this scene (road_level + margin) so it blocks the baked obstacle roof (+0.9 m)
-    while accepting road hits.  There is no SPAWN_SURFACE_Z_MIN fallback — that logic was the
-    regression source (road z = −1.95 fell below the old −1.0 floor, triggering a wrong fallback).
     """
     surf_z_max = getattr(cfg, "SPAWN_SURFACE_Z_MAX", 2.0)
     z_offset   = getattr(cfg, "SPAWN_Z_OFFSET", 0.5)

@@ -91,7 +91,7 @@ Formula: 5 × 5 × 2 = **50 cases**. Total with 3 controllers: **150 runs**.
 | Variable | Values |
 |---|---|
 | `ego_speed_kmh` | 20, 30, 40, 50, 60 km/h |
-| `approach_d` | 30, 40, 50, 60, 70 m (centre-to-centre from ego spawn) |
+| `approach_d` | 30, 40, 50, 62, 70 m (centre-to-centre from ego spawn) |
 | `mu` | 0.85 (dry), 0.40 (wet) |
 
 Formula: 5 × 5 × 2 = **50 cases**. Total with 3 controllers: **150 runs**.
@@ -1737,5 +1737,98 @@ Verification: The log would show `status=BLOCKED(overlap)` (not `status=BLOCKED(
 | `README.md` | Update §Spawn Safety: train000 road level note, scene-relative threshold, removed Z_MIN, updated log examples, approach_d table 60→62 |
 
 **Untouched:** `runner.py`, `runner_lead_brake.py`, all scene03_2 spawns, `conflict.py`, `metrics.py`, CSV schema, matrix dimensions (5×5×2=50), `approach_d` values (62 is correct).
+
+*Last updated: 2026-07-24.*
+
+---
+
+### Spawn Strategy — July 2026 (Round 5: abandon cast_ray on train000, fixed SPAWN_ROAD_Z)
+
+**Problem:** Round 4's `spawn_ground_projected` (cast_ray + `SPAWN_SURFACE_Z_MAX = −0.95`) is fundamentally unreliable on the train000 3DGS scene. Two probe runs with identical (x,y) inputs returned completely different `surf_z` values, and adjacent points jumped implausibly:
+
+| Point | Old probe surf_z | Unified-probe surf_z |
+|---|---|---|
+| CCRS d=30 m | −1.96 | −0.571 |
+| CCRS d=40 m | −1.96 | −0.576 |
+| CCRS d=50 m | −1.97 | −0.580 |
+| CCRS d=58 m | −1.97 | −1.969 |
+| CCRS d=62 m | −1.97 | −0.585 |
+| CUTOUT_TARGET | −1.96 | −0.691 |
+| CUTOUT_LEAD_* | −1.95 | −1.945 → (0,0,0) bug |
+
+The 3DGS mesh has floating artifact layers above the true road. `cast_ray` hits different layers each run. **No `SPAWN_SURFACE_Z_MAX` threshold can separate road from obstacle when road readings span −1.97 to −0.57 across runs.** The "old probe" readings (consistently ≈ −1.95 at every car position) were the correct road level; Round 4 mixed them with upper-layer hits.
+
+**Second failure — (0,0,0) origin bug on ego/lead:** When cast_ray correctly returned surf_z ≈ −1.945, Round 4's formula `spawn_z = surf_z + SPAWN_Z_OFFSET(0.5) = −1.445` placed the vehicle bottom at −1.445 − 0.75 (Audi TT extent.z) = −2.20 m — 0.25 m underground. CARLA placed the actor at (0,0,0), which the x,y drift check correctly caught as `BLOCKED(drift)`. The earlier fix only covered the CCRS target; the ego and lead spawns in runner_cutout.py still went through spawn_ground_projected and hit the same bug.
+
+**Fix: abandon per-point cast_ray; use fixed empirical road z.**
+
+The old probe (before 3DGS floating layers affected readings) showed train000 road is flat: z = −1.94 to −1.97 m (3 cm spread). A single fixed value is safe. Spawning at `road_z + 1.0 = −0.95 m` puts the vehicle clearly above the mesh for any Audi TT-class vehicle; physics settles it during `SETTLE_TICKS`. The only obstacle gate is `try_spawn_actor` overlap — the baked car at 60 m forward blocks spawns there; all other positions are clear.
+
+**New function:** `actors.spawn_fixed_road_z(world, x, y, road_z, yaw, label, model)`:
+- No cast_ray.
+- Spawns at `road_z + 1.0 m`.
+- Checks x,y drift (same 0.1 m tolerance).
+- Returns `(actor_or_None, status_str)` — same contract as `spawn_ground_projected`.
+
+**Config constants added:**
+
+| File | Constant | Value |
+|---|---|---|
+| `config/scenario_ccrs.py` | `SPAWN_ROAD_Z` | `−1.95` |
+| `config/scenario_cutout.py` | `SPAWN_ROAD_Z` | `−1.95` |
+
+**Modified files (Round 5):**
+
+| File | Change |
+|---|---|
+| `core/actors.py` | Add `spawn_fixed_road_z()`; update `spawn_ground_projected()` docstring noting it is NOT used for train000 |
+| `core/runner_ccrs.py` | EGO + TARGET spawns → `spawn_fixed_road_z(cfg.SPAWN_ROAD_Z, ...)` |
+| `core/runner_cutout.py` | EGO + LEAD + TARGET spawns → `spawn_fixed_road_z(cfg.SPAWN_ROAD_Z, ...)` |
+| `config/scenario_ccrs.py` | Remove `SPAWN_SURFACE_Z_MAX` / `SPAWN_Z_OFFSET`; add `SPAWN_ROAD_Z = -1.95` |
+| `config/scenario_cutout.py` | Same; keep `CUTOUT_STOP_MAX_M = 18.0` (unrelated, guards lead path) |
+| `tools/probe_spawn_points.py` | Import `spawn_fixed_road_z`; remove `_ProbeCfg` / `SURFACE_Z_WARN`; probe uses same path as runner |
+| `README.md` | Rewrite §Spawn Safety: cast_ray unreliability finding, fixed-road-z strategy, new log format |
+| `TECHNICAL_DOC.md` | §2 CCRs approach_d table 60 → 62; this revision entry |
+
+**Untouched:** `runner.py`, `runner_lead_brake.py`, all scene03_2 spawns, `conflict.py`, `metrics.py`, CSV schema, matrix dimensions (5×5×2=50), `CUTOUT_STOP_MAX_M`, controller logic, result_txt values.
+
+#### Expected probe output (run before matrix)
+
+```bash
+python tools/probe_spawn_points.py
+```
+
+Expected summary — `BLOCKED(overlap)` only at the baked-car coordinate:
+
+```
+CCRS_d=30m                          OK
+CCRS_d=40m                          OK
+CCRS_d=50m                          OK
+CCRS_d=58m                          OK
+CCRS_d=60m                          BLOCKED: CARLA overlap-rejected (baked obstacle at this location)
+CCRS_d=62m                          OK
+CCRS_d=70m                          OK
+CUTOUT_EGO                          OK
+CUTOUT_TARGET                       OK
+CUTOUT_LEAD_20kmh...60kmh           OK  (5 rows)
+CUT_LEAD_PATH_60m_60m_fwd_1.5m_lat  BLOCKED(overlap)  (right lane at baked-car zone)
+```
+
+#### Expected `[SPAWN]` log during matrix runs
+
+CCRS clear road (approach_d=62 m):
+```
+[SPAWN] [CCRS] ego30_ad62_mu0.85  req=(-46.17,-30.44)  road_z=-1.950  blocked=N  status=OK  final=(-46.17,-30.44,-0.98)
+```
+
+#### Verification (no CARLA)
+
+```bash
+python3 -m py_compile core/actors.py core/runner_ccrs.py core/runner_cutout.py \
+    config/scenario_ccrs.py config/scenario_cutout.py tools/probe_spawn_points.py
+
+python3 tools/check_conflict.py
+# Expected: cut-in 50/50, lead-brake 50/50, CCRs 50/50, cut-out 50/50 = 200/200 conflict
+```
 
 *Last updated: 2026-07-24.*

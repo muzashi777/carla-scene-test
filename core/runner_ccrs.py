@@ -101,8 +101,12 @@ def run_case(sess, cfg, case, controller_name, delay_frames, detector,
 
     try:
         # ── EGO ──
-        ego = actors.spawn_vehicle(world, **cfg.EGO_SPAWN)
-        if not ego:
+        ego, _ego_status = actors.spawn_fixed_road_z(
+            world, cfg.EGO_SPAWN["x"], cfg.EGO_SPAWN["y"],
+            cfg.SPAWN_ROAD_Z, cfg.EGO_SPAWN["yaw"],
+            label="[CCRS] EGO",
+        )
+        if ego is None:
             rec.result_txt = "EGO spawn failed"; return rec, None
         actor_list.append(ego)
         ego.apply_control(carla.VehicleControl(brake=1.0, hand_brake=True))
@@ -117,11 +121,11 @@ def run_case(sess, cfg, case, controller_name, delay_frames, detector,
         _case_label = (f"[CCRS] ego{case['ego_speed_kmh']:.0f}_"
                        f"ad{case.get('approach_d', '?')}_"
                        f"mu{case['mu']}")
-        target, _spawn_status = actors.spawn_ground_projected(
+        target, _spawn_status = actors.spawn_fixed_road_z(
             world,
             x=target_spawn["x"], y=target_spawn["y"],
-            z_nom=target_spawn["z"], yaw=target_spawn["yaw"],
-            cfg=cfg, label=_case_label,
+            road_z=cfg.SPAWN_ROAD_Z, yaw=target_spawn["yaw"],
+            label=_case_label,
             model=target_spawn.get("model", "vehicle.*"),
         )
         if target is None:

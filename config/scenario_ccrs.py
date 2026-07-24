@@ -117,17 +117,20 @@ SHOW_WINDOW = True
 # visual verification — the coordinate must be confirmed in CARLA first.
 APPROACH_DISTANCES = [30.0, 40.0, 50.0, 62.0, 70.0]   # m — 60.0 → replace after probe
 
-# ── Spawn safety thresholds (train000-specific) ───────────────────────────────
-# train000 road level: z ≈ −1.95 m.  Baked obstacle roof (60 m point): z ≈ +0.9 m.
-# SPAWN_SURFACE_Z_MAX is set to road_level + 1.0 m margin = −1.95 + 1.0 = −0.95.
-#   surf_z > −0.95 → at or above obstacle roof → SPAWN_BLOCKED
-#   surf_z ≤ −0.95 → at road surface → use surf_z + SPAWN_Z_OFFSET (normal path)
-# There is NO SPAWN_SURFACE_Z_MIN fallback — the road IS at negative z (−1.95).
-#   A Z_MIN floor at −1.0 would misclassify every road hit as "underground", which
-#   was the source of the all-rows-BLOCKED regression (2026-07).
-# SPAWN_Z_OFFSET: height above projected ground surface used as vehicle centre z.
-SPAWN_SURFACE_Z_MAX = -0.95  # m world-z (scene-relative: train000 road + 1.0 m margin)
-SPAWN_Z_OFFSET      =  0.5   # m above ground surface for vehicle spawn centre
+# ── Spawn strategy for train000 (fixed road z, no cast_ray) ──────────────────
+# world.cast_ray() is unreliable on the 3DGS mesh: the same (x,y) returns
+# surface z anywhere from −1.97 to −0.57 across runs (floating mesh layers).
+# No absolute threshold can separate road from obstacle when the road itself
+# reads in that range.
+#
+# Solution: abandon per-point cast_ray.  Use a single fixed road z measured
+# empirically from the old probe (−1.94 to −1.97 across all car positions;
+# 3 cm spread → flat road → single value is safe).
+# Spawning at road_z + 1.0 m puts the vehicle clearly above the mesh
+# (Audi TT extent.z ≈ 0.75 m → bottom at road_z + 0.25 m; physics settles it).
+# Obstacle gate: try_spawn_actor overlap only — baked car at 60 m blocks
+# spawns there; clear road points (30/40/50/62/70 m) spawn fine.
+SPAWN_ROAD_Z = -1.95   # m — empirically measured train000 road surface z
 # Surface gaps (approx, GAP_OFFSET ≈ 4.5 m): ~25.5 / ~35.5 / ~45.5 / ~55.5 / ~65.5 m
 # TTC at spawn examples: 30 m + 60 km/h ≈ 1.5 s (hard); 70 m + 20 km/h ≈ 11.8 s (easy)
 # All 5 values are conflict cases: worst-case 70 m @ 20 km/h → t ≈ 11.8 s < 20 s window ✓

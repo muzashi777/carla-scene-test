@@ -354,48 +354,53 @@ Run `python core/report.py results/*.csv` for a per-controller CPEIM summary tab
 
 ## Spawn Safety (train000 scenarios)
 
-Both `runner_ccrs.py` and `runner_cutout.py` call the shared `actors.spawn_ground_projected()` function to find the road-surface z at the target/lead spawn coordinate before spawning. **The runner hard-fails** instead of warning-and-proceeding whenever the surface is suspect. `tools/probe_spawn_points.py` uses the same function, so "CLEAR in probe" always equals "spawns OK in runner".
+All train000 actors (ego, target, lead) are spawned via `actors.spawn_fixed_road_z()`, which uses a **fixed empirically-measured road z** instead of per-point ray casting. `tools/probe_spawn_points.py` uses the same function — "CLEAR in probe" always equals "spawns OK in runner".
 
-### Scene geometry (train000)
+### Why not cast_ray?
 
-The drivable road on train000 sits at **z ≈ −1.95 m** (not ≈ 0). The baked static-vehicle obstacle at the 60 m point reads **surf_z ≈ +0.9 m**.
+`world.cast_ray()` is unreliable on the train000 3DGS collision mesh. The same (x,y) coordinate can return surface z values anywhere from −1.97 to −0.57 m across different runs, because the patchy 3DGS mesh has floating artifact layers above the true road surface. No fixed `SPAWN_SURFACE_Z_MAX` threshold can separate road hits (which should read ≈ −1.95) from obstacle-roof hits (≈ +0.9) when road itself reads anywhere in −1.97 to −0.57 depending on which layer the ray hits. Two probe runs on the same CCRS points produced completely different surf_z values (e.g. d=30 m: −1.96 vs −0.571), confirming the per-point cast_ray strategy cannot work on this scene.
 
-`SPAWN_SURFACE_Z_MAX` is set to `−0.95` (= road_level + 1.0 m margin): anything above −0.95 is treated as an obstacle roof and hard-blocked. This is a **scene-relative** threshold; do not copy it to other scenes without re-probing.
+Additionally, using cast_ray + SPAWN_Z_OFFSET=0.5 produced the **(0,0,0) origin bug**: when cast_ray correctly returned surf_z ≈ −1.945, spawning at −1.945 + 0.5 = −1.445 m placed the vehicle bottom at −1.445 − 0.75 (extent.z) = −2.20 m — 0.25 m below the road mesh. CARLA detected the underground penetration and placed the actor at (0,0,0), triggering the x,y drift check.
 
-There is **no `SPAWN_SURFACE_Z_MIN` fallback**. An earlier version used −1.0 as a floor to detect underground mesh hits, but the road is at −1.95 — below −1.0 — so every road hit triggered the fallback, spawning at the wrong z and causing all rows to block (the 2026-07 regression). The corrected path: if `surf_z ≤ SPAWN_SURFACE_Z_MAX`, use `surf_z + SPAWN_Z_OFFSET` directly; let CARLA reject any genuinely bad spawn via overlap check.
+### Fixed road z strategy
+
+The old probe (before 3DGS artifacts affected the cast_ray readings) showed the train000 road is flat at **z = −1.94 to −1.97 m** (3 cm spread across all car positions). A single fixed value is safe.
+
+`SPAWN_ROAD_Z = -1.95` is defined in both `config/scenario_ccrs.py` and `config/scenario_cutout.py`.
+
+All actors spawn at `road_z + 1.0 m = −0.95 m`. For the Audi TT (extent.z ≈ 0.75 m) the vehicle bottom is at −0.95 − 0.75 = −1.70 m — 0.25 m above the road mesh. CARLA physics settles it the remaining 0.25 m during `SETTLE_TICKS = 20`.
+
+**No `SPAWN_SURFACE_Z_MAX` threshold. No `cast_ray`.** The only obstacle gate is `try_spawn_actor` overlap: a baked vehicle at the spawn point causes CARLA to reject the spawn (returns None) → `BLOCKED(overlap)`.
 
 ### Failure modes → `SPAWN_BLOCKED`
 
 | Trigger | Meaning | Action |
 |---|---|---|
-| `surf_z > SPAWN_SURFACE_Z_MAX` (−0.95) | Ray hit baked obstacle roof, not road | Replace the coordinate via probe |
-| `try_spawn_actor` returns `None` | CARLA rejected spawn (bounding-box overlap) | Same |
-| x,y drift > 0.1 m after spawn | Bad z placed actor at (0,0,0) | Same |
+| `try_spawn_actor` returns `None` | CARLA overlap-rejected (baked obstacle or geometry conflict) | Probe nearby coordinates |
+| x,y drift > 0.1 m after spawn | Actor placed at (0,0,0) — spawn_z underground | Check SPAWN_ROAD_Z calibration |
 
 In all cases `result_txt = "SPAWN_BLOCKED"` is written to the CSV and the run is skipped.
 
 ### `[SPAWN]` diagnostic log format
 
-Every train000 TARGET (CCRs) and LEAD (cut-out) spawn emits one line:
+Every train000 actor spawn emits one line:
 
 ```
-[SPAWN] [CCRS] ego30_ad62_mu0.85  req=(-46.17,-30.44,z_nom=0.250)  surf_z=-1.952  dz=-2.202  blocked=N  status=OK  final=(-46.17,-30.44,-1.452)
-[SPAWN] [CCRS] ego30_ad60_mu0.85  req=(-43.64,-32.74,z_nom=0.250)  surf_z=0.901  dz=+0.651  blocked=Y  status=BLOCKED(obstacle_roof)  final=n/a
-[SPAWN] [CUTOUT] ego30_ttc2.0_mu0.85  req=(...)  surf_z=...  blocked=N  status=OK  final=(...)
+[SPAWN] [CCRS] ego30_ad62_mu0.85  req=(-46.17,-30.44)  road_z=-1.950  blocked=N  status=OK  final=(-46.17,-30.44,-0.980)
+[SPAWN] [CCRS] ego30_ad60_mu0.85  req=(-43.64,-32.74)  road_z=-1.950  blocked=Y  status=BLOCKED(overlap)  final=n/a
+[SPAWN] [CUTOUT] ego30_ttc2.0_mu0.85_TARGET  req=(...)  road_z=-1.950  blocked=N  status=OK  final=(...)
 ```
 
 **Reading the log:**
 - `blocked=N  status=OK` → spawn succeeded; `final=(x,y,z)` confirms the actor's actual location.
-- `blocked=Y  status=BLOCKED(obstacle_roof)` → surf_z exceeded SPAWN_SURFACE_Z_MAX; coordinate is on a baked obstacle.
-- `blocked=Y  status=BLOCKED(overlap)` → CARLA rejected the spawn (bounding-box collision at the projected z).
-- `dz` is the vertical delta between projected surface and config nominal z.
+- `blocked=Y  status=BLOCKED(overlap)` → CARLA rejected spawn; baked obstacle at this coordinate.
 
-### Known blocked coordinate (resolved)
+### Known blocked coordinate
 
-`approach_d = 60.0 m` mapped to `(-43.636, -32.741)` in train000, where a baked static vehicle sits in the 3DGS collision mesh. Probing confirmed `approach_d = 62.0 m` is on clear road (surf_z ≈ −1.95). The matrix now uses `[30, 40, 50, 62, 70]`.
+`approach_d = 60.0 m` maps to `(-43.636, -32.741)` in train000 where a baked static vehicle sits. `approach_d = 62.0 m` is on clear road. The matrix uses `[30, 40, 50, 62, 70]`.
 
 ### x,y-unchanged invariant
 
-Ground projection **only modifies z**. The runner hard-blocks and destroys the actor if CARLA places it more than 0.1 m horizontally from the requested coordinate. This guards against (0,0,0) placements that can occur when spawn z is underground.
+`spawn_fixed_road_z` only sets z. The runner hard-blocks and destroys the actor if CARLA places it more than 0.1 m horizontally from the requested coordinate.
 
 ---

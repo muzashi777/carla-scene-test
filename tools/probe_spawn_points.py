@@ -10,11 +10,13 @@ with CARLA live to confirm that all actor spawn coordinates land on clear road
 and not on baked scene obstacles.
 
 For each candidate point the script:
-  1. Casts a vertical ray (world.cast_ray) and reports the surface z.
-  2. Attempts to spawn a test vehicle at surface_z + 0.5 m.
-  3. Immediately destroys it if spawned.
+  1. Attempts to spawn a test vehicle using spawn_fixed_road_z (same path as
+     the runners — no cast_ray, fixed road z from config).
+  2. Immediately destroys it if spawned.
 
-OUTPUT: a table showing which coordinates are clear and which are blocked.
+"CLEAR in probe" == "spawns OK in runner" — both use spawn_fixed_road_z.
+
+OUTPUT: a table showing which coordinates are clear (OK) and which are blocked.
 
 USAGE
 -----
@@ -23,14 +25,13 @@ USAGE
 
 WHAT TO DO WITH THE RESULTS
 ----------------------------
-CCRS approach_d=60 m row will show BLOCKED (surface_z suspiciously high or
-spawn rejected).  Pick whichever of 58 m or 62 m shows CLEAR + reasonable
-surface_z, then update APPROACH_DISTANCES in config/scenario_ccrs.py.
+CCRS approach_d=60 m row shows BLOCKED(overlap) — the baked static vehicle at
+that position causes CARLA to reject the spawn.  62 m and other approach_d
+values show OK on clear road.
 
 Cut-out lead-path rows (labelled "CUT_LEAD_PATH_60m_*") show whether the
 post-cutout lead corridor at ~60 m forward/1.5 m lateral is clear.  If BLOCKED,
-CUTOUT_STOP_MAX_M = 18.0 in config/scenario_cutout.py is already guarding
-those cells.  If CLEAR, you may raise or remove CUTOUT_STOP_MAX_M.
+CUTOUT_STOP_MAX_M = 18.0 in config/scenario_cutout.py guards those cells.
 """
 
 import math
@@ -46,7 +47,7 @@ try:
 except ImportError:
     sys.exit("carla module not found — activate the CARLA Python virtualenv first")
 
-from core.actors import ground_projection_z, spawn_ground_projected
+from core.actors import spawn_fixed_road_z
 
 # ── Scene geometry constants ──────────────────────────────────────────────────
 EGO_X, EGO_Y     = 6.42, 0.34
@@ -58,23 +59,13 @@ FWD_Y             = math.sin(_yaw_rad)   # ≈ -0.5514
 RGT_X             = math.sin(_yaw_rad)   # ≈ -0.5514
 RGT_Y             = -math.cos(_yaw_rad)  # ≈  0.8343
 
-# Spawn safety thresholds — must match config/scenario_ccrs.py and scenario_cutout.py.
-# train000 road z ≈ −1.95; obstacle roof ≈ +0.9; threshold = road + 1.0 m margin = −0.95.
-SPAWN_Z_OFFSET   = 0.5     # m above projected surface
-VEHICLE_MODEL    = "vehicle.ue4.audi.tt"
-HOST             = "localhost"
-PORT             = 2000
-TIMEOUT          = 10.0
-SURFACE_Z_WARN   = -0.95   # m — surface above this warns of possible obstacle (matches SPAWN_SURFACE_Z_MAX)
-
-
-# Minimal cfg-like object consumed by spawn_ground_projected (same interface as scenario configs).
-class _ProbeCfg:
-    SPAWN_SURFACE_Z_MAX = SURFACE_Z_WARN
-    SPAWN_Z_OFFSET      = SPAWN_Z_OFFSET
-
-
-_probe_cfg = _ProbeCfg()
+# Fixed road z — empirically measured from train000 (old probe: −1.94 to −1.97,
+# 3 cm spread across all car positions; matches SPAWN_ROAD_Z in both scenario configs).
+ROAD_Z        = -1.95
+VEHICLE_MODEL = "vehicle.ue4.audi.tt"
+HOST          = "localhost"
+PORT          = 2000
+TIMEOUT       = 10.0
 
 
 def _fwd_point(d_m, lat_m=0.0):
@@ -86,14 +77,15 @@ def _fwd_point(d_m, lat_m=0.0):
 
 
 def probe_point(world, label, x, y):
-    """Probe one (x, y) coordinate using the shared spawn_ground_projected path.
+    """Probe one (x, y) coordinate using the same spawn_fixed_road_z path as the runners.
 
-    Uses the same logic as runner_ccrs / runner_cutout so 'CLEAR in probe' == 'spawns OK in runner'.
+    'CLEAR in probe' == 'spawns OK in runner': both call spawn_fixed_road_z with
+    the same ROAD_Z.  No cast_ray, no surface-z threshold — only try_spawn_actor
+    overlap is tested.
     """
-    surface_z = ground_projection_z(world, x, y)
-    actor, status = spawn_ground_projected(
-        world, x=x, y=y, z_nom=0.25, yaw=EGO_YAW_DEG,
-        cfg=_probe_cfg, label=f"PROBE {label}",
+    actor, status = spawn_fixed_road_z(
+        world, x=x, y=y, road_z=ROAD_Z, yaw=EGO_YAW_DEG,
+        label=f"PROBE {label}",
         model=VEHICLE_MODEL,
     )
     spawn_ok = actor is not None
@@ -102,9 +94,7 @@ def probe_point(world, label, x, y):
             actor.destroy()
         except Exception:
             pass
-    z_flag = (surface_z is not None and surface_z > SURFACE_Z_WARN)
-    return dict(label=label, x=x, y=y, surface_z=surface_z,
-                spawn_ok=spawn_ok, z_flag=z_flag)
+    return dict(label=label, x=x, y=y, spawn_ok=spawn_ok, status=status)
 
 
 def build_probe_list():
@@ -144,7 +134,9 @@ def main():
     print("=" * 70)
     print(f"  EGO_SPAWN: ({EGO_X}, {EGO_Y})  yaw={EGO_YAW_DEG}°")
     print(f"  Forward:   ({FWD_X:.4f}, {FWD_Y:.4f})")
-    print(f"  SURFACE_Z_WARN threshold: z > {SURFACE_Z_WARN} m")
+    print(f"  ROAD_Z (fixed, no cast_ray): {ROAD_Z} m")
+    print(f"  Spawn z = ROAD_Z + 1.0 = {ROAD_Z + 1.0} m for all points")
+    print(f"  Obstacle gate: try_spawn_actor overlap only")
     print()
 
     client = carla.Client(HOST, PORT)
@@ -156,7 +148,7 @@ def main():
     points = build_probe_list()
 
     # Header
-    hdr = f"{'Label':<40} {'x':>8} {'y':>8} {'surf_z':>8} {'spawn':>6} {'note'}"
+    hdr = f"{'Label':<40} {'x':>8} {'y':>8} {'status':>20}"
     print(hdr)
     print("-" * len(hdr))
 
@@ -165,17 +157,12 @@ def main():
 
     for label, x, y in points:
         r = probe_point(world, label, x, y)
-        sz   = f"{r['surface_z']:6.2f}" if r['surface_z'] is not None else "  None"
-        ok   = "OK   " if r['spawn_ok'] else "FAIL "
-        note = ""
-        if r['z_flag']:
-            note = f"  *** surface z={r['surface_z']:.2f} > {SURFACE_Z_WARN} — possible obstacle ***"
+        ok_str = "OK" if r['spawn_ok'] else r['status']
         if not r['spawn_ok']:
-            note = note or "  BLOCKED"
             blocked_labels.append(label)
         else:
             clear_labels.append(label)
-        print(f"  {label:<38} {x:8.3f} {y:8.3f} {sz} {ok}{note}")
+        print(f"  {label:<38} {x:8.3f} {y:8.3f}   {ok_str}")
         time.sleep(0.05)   # small pause to let CARLA settle between destroy/spawn
 
     print()
@@ -188,13 +175,12 @@ def main():
         for lbl in blocked_labels:
             print(f"    - {lbl}")
     print()
-    print("  NEXT STEPS:")
-    print("  1. Check CCRS_d=58m and CCRS_d=62m rows.")
-    print("     Whichever shows CLEAR + reasonable surf_z → set that as")
-    print("     the replacement for 60.0 in config/scenario_ccrs.py APPROACH_DISTANCES.")
-    print("  2. Check CUT_LEAD_PATH_60m_* rows (lat=1.5 m, right lane).")
-    print("     If they are CLEAR, CUTOUT_STOP_MAX_M in config/scenario_cutout.py")
-    print("     may be raised or set to None.  If BLOCKED, keep 18.0 m.")
+    print("  EXPECTED RESULTS:")
+    print("  CCRS_d=60m  → BLOCKED(overlap) — baked car at that position")
+    print("  CCRS_d=30/40/50/62/70m → OK (clear road)")
+    print("  CUTOUT_EGO / CUTOUT_TARGET / CUTOUT_LEAD_* → OK (clear road)")
+    print("  CUT_LEAD_PATH_60m at lat=1.5 m → BLOCKED (obstacle zone)")
+    print("    → CUTOUT_STOP_MAX_M=18.0 in config/scenario_cutout.py guards this")
     print("=" * 70)
 
 
