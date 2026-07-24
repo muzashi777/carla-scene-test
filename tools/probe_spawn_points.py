@@ -34,13 +34,19 @@ those cells.  If CLEAR, you may raise or remove CUTOUT_STOP_MAX_M.
 """
 
 import math
+import os as _os
 import sys
 import time
+
+# Allow running from any directory — add project root to path.
+sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
 
 try:
     import carla
 except ImportError:
     sys.exit("carla module not found — activate the CARLA Python virtualenv first")
+
+from core.actors import ground_projection_z, spawn_ground_projected
 
 # ── Scene geometry constants ──────────────────────────────────────────────────
 EGO_X, EGO_Y     = 6.42, 0.34
@@ -52,13 +58,23 @@ FWD_Y             = math.sin(_yaw_rad)   # ≈ -0.5514
 RGT_X             = math.sin(_yaw_rad)   # ≈ -0.5514
 RGT_Y             = -math.cos(_yaw_rad)  # ≈  0.8343
 
-SPAWN_Z_OFFSET    = 0.5    # m above projected surface for vehicle centre
-PROBE_Z_START     = 20.0   # m — ray cast from this height downward
-VEHICLE_MODEL     = "vehicle.ue4.audi.tt"
-HOST              = "localhost"
-PORT              = 2000
-TIMEOUT           = 10.0
-SURFACE_Z_WARN    = 2.0    # m — surface above this warns of possible obstacle
+# Spawn safety thresholds — must match config/scenario_ccrs.py and scenario_cutout.py.
+# train000 road z ≈ −1.95; obstacle roof ≈ +0.9; threshold = road + 1.0 m margin = −0.95.
+SPAWN_Z_OFFSET   = 0.5     # m above projected surface
+VEHICLE_MODEL    = "vehicle.ue4.audi.tt"
+HOST             = "localhost"
+PORT             = 2000
+TIMEOUT          = 10.0
+SURFACE_Z_WARN   = -0.95   # m — surface above this warns of possible obstacle (matches SPAWN_SURFACE_Z_MAX)
+
+
+# Minimal cfg-like object consumed by spawn_ground_projected (same interface as scenario configs).
+class _ProbeCfg:
+    SPAWN_SURFACE_Z_MAX = SURFACE_Z_WARN
+    SPAWN_Z_OFFSET      = SPAWN_Z_OFFSET
+
+
+_probe_cfg = _ProbeCfg()
 
 
 def _fwd_point(d_m, lat_m=0.0):
@@ -69,45 +85,24 @@ def _fwd_point(d_m, lat_m=0.0):
     )
 
 
-def _cast_ray(world, x, y):
-    """Return surface z at (x, y) via downward ray, or None."""
-    try:
-        hits = world.cast_ray(
-            carla.Location(x=x, y=y, z=PROBE_Z_START),
-            carla.Location(x=x, y=y, z=-10.0),
-        )
-        return hits[0].location.z if hits else None
-    except Exception as e:
-        return None
+def probe_point(world, label, x, y):
+    """Probe one (x, y) coordinate using the shared spawn_ground_projected path.
 
-
-def _try_spawn(world, x, y, surface_z):
-    """Attempt to spawn + immediately destroy a test vehicle. Returns True if OK."""
-    if surface_z is None:
-        return False
-    spawn_z = surface_z + SPAWN_Z_OFFSET
-    bp = world.get_blueprint_library().filter(VEHICLE_MODEL)
-    if not bp:
-        bp = world.get_blueprint_library().filter("vehicle.*")
-    tf = carla.Transform(
-        carla.Location(x=x, y=y, z=spawn_z),
-        carla.Rotation(yaw=EGO_YAW_DEG),
+    Uses the same logic as runner_ccrs / runner_cutout so 'CLEAR in probe' == 'spawns OK in runner'.
+    """
+    surface_z = ground_projection_z(world, x, y)
+    actor, status = spawn_ground_projected(
+        world, x=x, y=y, z_nom=0.25, yaw=EGO_YAW_DEG,
+        cfg=_probe_cfg, label=f"PROBE {label}",
+        model=VEHICLE_MODEL,
     )
-    actor = world.try_spawn_actor(bp[0], tf)
-    if actor:
+    spawn_ok = actor is not None
+    if actor is not None:
         try:
             actor.destroy()
         except Exception:
             pass
-        return True
-    return False
-
-
-def probe_point(world, label, x, y):
-    """Probe one (x, y) coordinate. Returns a result dict."""
-    surface_z = _cast_ray(world, x, y)
-    spawn_ok   = _try_spawn(world, x, y, surface_z)
-    z_flag     = (surface_z is not None and surface_z > SURFACE_Z_WARN)
+    z_flag = (surface_z is not None and surface_z > SURFACE_Z_WARN)
     return dict(label=label, x=x, y=y, surface_z=surface_z,
                 spawn_ok=spawn_ok, z_flag=z_flag)
 

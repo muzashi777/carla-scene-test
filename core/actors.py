@@ -138,6 +138,76 @@ def spawn_vehicle(world, x, y, z, yaw, model="vehicle.*"):
     return world.try_spawn_actor(bp, tf)
 
 
+_SPAWN_XY_TOL = 0.1  # m — max allowed x,y drift after spawn
+
+
+def spawn_ground_projected(world, x, y, z_nom, yaw, cfg, label="", model="vehicle.*"):
+    """Unified ground-projected vehicle spawn used by runner_ccrs, runner_cutout, and probe_spawn_points.
+
+    Ensures 'CLEAR in probe' == 'spawns OK in runner' — no divergent copies.
+
+    Steps:
+      1. Cast a downward ray to find the road-surface z.
+      2. Hard-block if surf_z > SPAWN_SURFACE_Z_MAX (baked obstacle roof above road level).
+      3. Spawn at surf_z + SPAWN_Z_OFFSET (or z_nom when no ray hit).
+      4. Hard-block if CARLA overlap-rejects the spawn.
+      5. Hard-block if the placed actor drifted in x,y (CARLA (0,0,0) placement on bad z).
+
+    Returns (actor_or_None, status_str).
+      status_str == "OK"  → actor is valid and in place.
+      status_str starts with "BLOCKED" → actor is None, reason appended.
+    Always prints one [SPAWN] log line.
+
+    Scene note (train000): road sits at z ≈ −1.95 m.  SPAWN_SURFACE_Z_MAX in config is set
+    relative to this scene (road_level + margin) so it blocks the baked obstacle roof (+0.9 m)
+    while accepting road hits.  There is no SPAWN_SURFACE_Z_MIN fallback — that logic was the
+    regression source (road z = −1.95 fell below the old −1.0 floor, triggering a wrong fallback).
+    """
+    surf_z_max = getattr(cfg, "SPAWN_SURFACE_Z_MAX", 2.0)
+    z_offset   = getattr(cfg, "SPAWN_Z_OFFSET", 0.5)
+
+    proj_z = ground_projection_z(world, x, y)
+
+    if proj_z is None:
+        spawn_z  = z_nom
+        proj_str = "n/a"
+        dz_str   = "n/a"
+    elif proj_z > surf_z_max:
+        print(f"[SPAWN] {label}  req=({x:.3f},{y:.3f},z_nom={z_nom:.3f})  "
+              f"surf_z={proj_z:.3f}  dz={proj_z - z_nom:+.3f}  "
+              f"blocked=Y  status=BLOCKED(obstacle_roof)  final=n/a")
+        return None, (f"BLOCKED: surf_z={proj_z:.3f} > SPAWN_SURFACE_Z_MAX={surf_z_max} "
+                      f"— baked obstacle roof, not road")
+    else:
+        spawn_z  = proj_z + z_offset
+        proj_str = f"{proj_z:.3f}"
+        dz_str   = f"{proj_z - z_nom:+.3f}"
+
+    actor = spawn_vehicle(world, x=x, y=y, z=spawn_z, yaw=yaw, model=model)
+    if actor is None:
+        print(f"[SPAWN] {label}  req=({x:.3f},{y:.3f},z_nom={z_nom:.3f})  "
+              f"surf_z={proj_str}  dz={dz_str}  "
+              f"blocked=Y  status=BLOCKED(overlap)  final=n/a")
+        return None, f"BLOCKED: CARLA overlap-rejected spawn at z={spawn_z:.3f} (proj_z={proj_str})"
+
+    loc = actor.get_location()
+    xy_ok = abs(loc.x - x) <= _SPAWN_XY_TOL and abs(loc.y - y) <= _SPAWN_XY_TOL
+    print(f"[SPAWN] {label}  req=({x:.3f},{y:.3f},z_nom={z_nom:.3f})  "
+          f"surf_z={proj_str}  dz={dz_str}  "
+          f"blocked={'N' if xy_ok else 'Y'}  "
+          f"status={'OK' if xy_ok else 'BLOCKED(drift)'}  "
+          f"final=({loc.x:.3f},{loc.y:.3f},{loc.z:.3f})")
+    if not xy_ok:
+        try:
+            actor.destroy()
+        except Exception:
+            pass
+        return None, (f"BLOCKED: x,y drifted ({x:.3f},{y:.3f}) → ({loc.x:.3f},{loc.y:.3f}); "
+                      f"spawn_z={spawn_z:.3f} may be underground")
+
+    return actor, "OK"
+
+
 def ground_projection_z(world, x, y, probe_z=20.0):
     """Cast a vertical ray at (x, y) and return the z of the first surface hit, or None.
 

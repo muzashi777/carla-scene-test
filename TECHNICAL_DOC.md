@@ -1683,3 +1683,59 @@ BLOCKED line (note the exact coordinate and approach_d to fix):
 Any BLOCKED line tells you exactly which case and coordinate to probe. Fix it by running `tools/probe_spawn_points.py` in CARLA, confirm 58 m or 62 m is clear, then replace `60.0` in `config/scenario_ccrs.py:APPROACH_DISTANCES`.
 
 *Last updated: 2026-07-24.*
+
+---
+
+### Spawn Hardening — July 2026 (Round 4: unified spawn path + scene-relative threshold)
+
+**Problem:** Adding `SPAWN_SURFACE_Z_MIN = -1.0` in Round 3 to catch underground mesh hits was miscalibrated for train000. The road sits at z ≈ −1.95 m — below the −1.0 floor — so every road ray hit triggered the `UNDERGROUND_HIT(fallback)` branch. The fallback spawned at the config nominal z = 0.25, which is 2.2 m above the road; at the computed (x, y) positions this z is inside 3DGS scene geometry, causing `try_spawn_actor` to return None → `SPAWN_BLOCKED` for **all 150 rows**.
+
+Additionally, `probe_spawn_points.py` had no Z_MIN check — it cast the ray, used surf_z + 0.5 = −1.45, and CARLA accepted it — creating a divergence between "CLEAR in probe" and "BLOCKED in runner".
+
+**Root cause (precise):**
+1. `SPAWN_SURFACE_Z_MIN = -1.0` in config/scenario_ccrs.py and config/scenario_cutout.py.
+2. Road ray hit returns surf_z ≈ −1.95; −1.95 < −1.0 → `UNDERGROUND_HIT` branch fires for every road point.
+3. Falls back to `_spawn_z = target_spawn["z"]` = 0.25 (wrong for computed x,y positions).
+4. CARLA overlap rejection at z = 0.25 → `SPAWN_BLOCKED`.
+
+Verification: The log would show `status=BLOCKED(overlap)` (not `status=BLOCKED(obstacle_roof)`), confirming the failure is at `try_spawn_actor`, not at the z-gate.
+
+**Fix:**
+
+1. **Removed `SPAWN_SURFACE_Z_MIN`** from both scenario configs — no underground fallback. The road IS at negative z; spawning at surf_z + 0.5 = −1.45 is correct (probe-confirmed CLEAR).
+
+2. **Recalibrated `SPAWN_SURFACE_Z_MAX`** from 2.0 → **−0.95** (= train000 road level −1.95 + 1.0 m margin):
+   - Road −1.95: −1.95 > −0.95 → **FALSE** → allow (normal spawn path) ✓
+   - Obstacle roof +0.9: +0.9 > −0.95 → **TRUE** → `BLOCKED(obstacle_roof)` ✓
+   This is a scene-relative threshold. Document it if porting to another scene.
+
+3. **Factored into `actors.spawn_ground_projected()`** — shared by both runners and the probe. No divergent copies. The function: cast ray → gate on SPAWN_SURFACE_Z_MAX → spawn at surf_z + offset → check CARLA overlap → check x,y drift. One [SPAWN] log line per call.
+
+4. **Updated `probe_spawn_points.py`** to import and call `spawn_ground_projected` from `core.actors`. Probe output now matches runner behaviour exactly.
+
+**Threshold verification (offline, using probe's measured surf_z values):**
+
+| approach_d | surf_z | surf_z > −0.95 | Action |
+|---|---|---|---|
+| 30 m | −1.952 | FALSE | spawn at −1.452 → CLEAR ✓ |
+| 40 m | −1.952 | FALSE | spawn at −1.452 → CLEAR ✓ |
+| 50 m | −1.952 | FALSE | spawn at −1.452 → CLEAR ✓ |
+| 62 m | −1.952 | FALSE | spawn at −1.452 → CLEAR ✓ |
+| 70 m | −1.952 | FALSE | spawn at −1.452 → CLEAR ✓ |
+| 60 m (obstacle) | +0.901 | **TRUE** | BLOCKED(obstacle_roof) ✓ |
+
+**Modified files (Round 4):**
+
+| File | Change |
+|---|---|
+| `core/actors.py` | Add `spawn_ground_projected()` shared function; add `_SPAWN_XY_TOL` constant |
+| `core/runner_ccrs.py` | Replace ~90-line inline TARGET spawn block with `actors.spawn_ground_projected()` call |
+| `core/runner_cutout.py` | Replace ~80-line inline LEAD spawn block with `actors.spawn_ground_projected()` call |
+| `config/scenario_ccrs.py` | Remove `SPAWN_SURFACE_Z_MIN`; recalibrate `SPAWN_SURFACE_Z_MAX` 2.0 → −0.95 |
+| `config/scenario_cutout.py` | Same |
+| `tools/probe_spawn_points.py` | Import `ground_projection_z`, `spawn_ground_projected` from `core.actors`; remove local `_cast_ray`/`_try_spawn`; update `SURFACE_Z_WARN` to −0.95 |
+| `README.md` | Update §Spawn Safety: train000 road level note, scene-relative threshold, removed Z_MIN, updated log examples, approach_d table 60→62 |
+
+**Untouched:** `runner.py`, `runner_lead_brake.py`, all scene03_2 spawns, `conflict.py`, `metrics.py`, CSV schema, matrix dimensions (5×5×2=50), `approach_d` values (62 is correct).
+
+*Last updated: 2026-07-24.*

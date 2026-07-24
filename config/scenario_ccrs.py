@@ -117,14 +117,17 @@ SHOW_WINDOW = True
 # visual verification — the coordinate must be confirmed in CARLA first.
 APPROACH_DISTANCES = [30.0, 40.0, 50.0, 62.0, 70.0]   # m — 60.0 → replace after probe
 
-# ── Spawn safety thresholds ───────────────────────────────────────────────────
-# SPAWN_SURFACE_Z_MAX: ground_projection_z values above this trigger a warning that
-#   a baked scene obstacle (vehicle roof, wall, etc.) may be at the spawn coordinate.
-#   Raise this only if legitimate road terrain exceeds 2 m in world-z.
+# ── Spawn safety thresholds (train000-specific) ───────────────────────────────
+# train000 road level: z ≈ −1.95 m.  Baked obstacle roof (60 m point): z ≈ +0.9 m.
+# SPAWN_SURFACE_Z_MAX is set to road_level + 1.0 m margin = −1.95 + 1.0 = −0.95.
+#   surf_z > −0.95 → at or above obstacle roof → SPAWN_BLOCKED
+#   surf_z ≤ −0.95 → at road surface → use surf_z + SPAWN_Z_OFFSET (normal path)
+# There is NO SPAWN_SURFACE_Z_MIN fallback — the road IS at negative z (−1.95).
+#   A Z_MIN floor at −1.0 would misclassify every road hit as "underground", which
+#   was the source of the all-rows-BLOCKED regression (2026-07).
 # SPAWN_Z_OFFSET: height above projected ground surface used as vehicle centre z.
-SPAWN_SURFACE_Z_MAX = 2.0   # m world-z — above this = baked obstacle roof → SPAWN_BLOCKED
-SPAWN_SURFACE_Z_MIN = -1.0  # m world-z — below this = underground mesh hit → fall back to config z
-SPAWN_Z_OFFSET      = 0.5   # m above ground surface for vehicle spawn centre
+SPAWN_SURFACE_Z_MAX = -0.95  # m world-z (scene-relative: train000 road + 1.0 m margin)
+SPAWN_Z_OFFSET      =  0.5   # m above ground surface for vehicle spawn centre
 # Surface gaps (approx, GAP_OFFSET ≈ 4.5 m): ~25.5 / ~35.5 / ~45.5 / ~55.5 / ~65.5 m
 # TTC at spawn examples: 30 m + 60 km/h ≈ 1.5 s (hard); 70 m + 20 km/h ≈ 11.8 s (easy)
 # All 5 values are conflict cases: worst-case 70 m @ 20 km/h → t ≈ 11.8 s < 20 s window ✓

@@ -121,22 +121,18 @@ SPAWN_CLEARANCE_M    = 0.5  # m
 #   At 20 km/h + reveal_ttc=1.0 the gap is only 0.556 m (0.10 s); not viable.
 MIN_TRIGGER_SURF_GAP_M = 1.0  # m
 
-# ── 3DGS spawn safety thresholds ─────────────────────────────────────────────
-# SPAWN_SURFACE_Z_MAX: ground_projection_z values above this trigger a warning
-#   that a baked scene obstacle (vehicle roof, wall) may be at the spawn coord.
-# SPAWN_Z_OFFSET: height above projected ground surface for vehicle centre z.
-# CUTOUT_STOP_MAX_M: 2-D distance from trigger position at which the lead is
-#   hard-stopped (brake=1.0, hand_brake=True) regardless of phase.  Prevents
-#   the lead from entering the baked obstacle zone at ~60 m on train000 for the
-#   2 risk cells: 50 km/h/reveal_ttc=1.0 (natural extent ≈60.6 m) and
-#   60 km/h/reveal_ttc=1.0 (natural extent ≈66.3 m).  18 m from trigger point
-#   ensures the lead stops at <59 m from ego for all speeds ≤ 60 km/h.
-#   Has no effect for 20–40 km/h (those cells naturally stop in <14 m from trigger).
-#   Set to None to disable.
-SPAWN_SURFACE_Z_MAX = 2.0   # m world-z — above this = baked obstacle roof → SPAWN_BLOCKED
-SPAWN_SURFACE_Z_MIN = -1.0  # m world-z — below this = underground mesh hit → fall back to config z
-SPAWN_Z_OFFSET      = 0.5   # m above ground surface for vehicle spawn centre
-CUTOUT_STOP_MAX_M   = 18.0  # m from trigger point; None = unlimited
+# ── 3DGS spawn safety thresholds (train000-specific) ─────────────────────────
+# train000 road level: z ≈ −1.95 m.  Baked obstacle roof (60 m point): z ≈ +0.9 m.
+# SPAWN_SURFACE_Z_MAX = road_level + 1.0 m margin = −1.95 + 1.0 = −0.95.
+#   surf_z > −0.95 → obstacle roof territory → SPAWN_BLOCKED
+#   surf_z ≤ −0.95 → road surface → use surf_z + SPAWN_Z_OFFSET
+# No SPAWN_SURFACE_Z_MIN: the road IS at negative z; a floor at −1.0 miscategorises
+#   every road hit as "underground" (the 2026-07 all-rows-BLOCKED regression).
+# CUTOUT_STOP_MAX_M: hard-stop the lead this many metres past the trigger point to
+#   prevent it entering the baked obstacle zone at ~60 m on train000.
+SPAWN_SURFACE_Z_MAX = -0.95  # m world-z (scene-relative: train000 road + 1.0 m margin)
+SPAWN_Z_OFFSET      =  0.5   # m above ground surface for vehicle spawn centre
+CUTOUT_STOP_MAX_M   = 18.0   # m from trigger point; None = unlimited
 
 # ── Target reveal-TTC: primary matrix variable ────────────────────────────────
 # reveal_ttc = surface gap / ego_ms at the instant the lead cut-out triggers.
