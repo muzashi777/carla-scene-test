@@ -138,6 +138,28 @@ def spawn_vehicle(world, x, y, z, yaw, model="vehicle.*"):
     return world.try_spawn_actor(bp, tf)
 
 
+def ground_projection_z(world, x, y, probe_z=20.0):
+    """Cast a vertical ray at (x, y) and return the z of the first surface hit, or None.
+
+    Uses world.cast_ray() which works on any collision mesh including 3DGS scenes.
+    The returned z is whatever surface is highest at that (x,y) — road, baked vehicle
+    roof, raised kerb, etc.  Callers should validate the result against SPAWN_SURFACE_Z_MAX
+    to flag suspiciously high hits that indicate a baked scene obstacle rather than road.
+
+    Returns None if cast_ray is unavailable (CARLA < 0.9.10) or hits nothing.
+    """
+    try:
+        hits = world.cast_ray(
+            carla.Location(x=float(x), y=float(y), z=float(probe_z)),
+            carla.Location(x=float(x), y=float(y), z=-10.0),
+        )
+        return float(hits[0].location.z) if hits else None
+    except AttributeError:
+        return None   # cast_ray not available in this CARLA build
+    except Exception:
+        return None
+
+
 def _wheel_friction_attr(wheel):
     """Find the friction attribute name on the wheel (varies by CARLA version)"""
     for name in ("tire_friction", "friction", "lateral_friction", "longitudinal_friction"):

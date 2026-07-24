@@ -113,21 +113,39 @@ def run_case(sess, cfg, case, controller_name, delay_frames, detector,
         if "target_x" in case:
             target_spawn["x"] = case["target_x"]
             target_spawn["y"] = case["target_y"]
-        # Robust spawn: try SPAWN_Z_SWEEP z-values in order.  Some positions on the
-        # train000 3DGS mesh reject the nominal z (obstacle / terrain irregularity at
-        # that world coordinate); stepping up in z finds a valid surface.
-        _z_sweep = list(getattr(cfg, "SPAWN_Z_SWEEP", [target_spawn["z"]]))
-        if target_spawn["z"] not in _z_sweep:
-            _z_sweep.insert(0, target_spawn["z"])
-        target = None
-        for _z in _z_sweep:
-            target = actors.spawn_vehicle(world, **dict(target_spawn, z=_z))
-            if target:
-                if abs(_z - cfg.TARGET_SPAWN["z"]) > 1e-3:
-                    print(f"[SPAWN] TARGET spawned at z={_z:.2f} "
-                          f"(nominal z={cfg.TARGET_SPAWN['z']:.2f} failed — verify visually in CARLA)")
-                break
+
+        # Ground-projection spawn: find the actual scene surface z at (x,y) via
+        # world.cast_ray(), then place the vehicle at surface_z + SPAWN_Z_OFFSET.
+        # Fails loudly if CARLA rejects the spawn — no silent relocation.
+        # If cast_ray returns z above SPAWN_SURFACE_Z_MAX the coordinate likely
+        # sits on a baked obstacle; this is printed as a warning before the spawn
+        # attempt so the failure message is self-explanatory.
+        _surf_z_max = getattr(cfg, "SPAWN_SURFACE_Z_MAX", 2.0)
+        _z_offset   = getattr(cfg, "SPAWN_Z_OFFSET", 0.5)
+        _proj_z = actors.ground_projection_z(world, target_spawn["x"], target_spawn["y"])
+        if _proj_z is None:
+            _spawn_z = target_spawn["z"]
+            print(f"[SPAWN] ground_projection_z found no surface at "
+                  f"({target_spawn['x']:.2f},{target_spawn['y']:.2f}) "
+                  f"— cast_ray returned nothing; falling back to config z={_spawn_z:.2f}")
+        else:
+            if _proj_z > _surf_z_max:
+                print(f"[SPAWN] WARNING: surface at "
+                      f"({target_spawn['x']:.2f},{target_spawn['y']:.2f}) "
+                      f"is z={_proj_z:.2f} > SPAWN_SURFACE_Z_MAX={_surf_z_max:.2f} — "
+                      f"likely a baked obstacle at approach_d={case.get('approach_d','?')}m. "
+                      f"Choose a clear road coordinate.")
+            _spawn_z = _proj_z + _z_offset
+
+        target = actors.spawn_vehicle(world, **dict(target_spawn, z=_spawn_z))
         if not target:
+            _proj_str = f"{_proj_z:.2f}" if _proj_z is not None else "n/a"
+            print(f"[SPAWN] BLOCKED: CARLA rejected TARGET at "
+                  f"({target_spawn['x']:.2f},{target_spawn['y']:.2f},z={_spawn_z:.2f}) "
+                  f"[proj_z={_proj_str}]. "
+                  f"A baked scene obstacle is likely at "
+                  f"approach_d={case.get('approach_d','?')}m. "
+                  f"Run tools/probe_spawn_points.py to find a clear coordinate.")
             rec.result_txt = "TARGET spawn failed"; return rec, None
         actor_list.append(target)
         target.apply_control(carla.VehicleControl(brake=1.0, hand_brake=True))

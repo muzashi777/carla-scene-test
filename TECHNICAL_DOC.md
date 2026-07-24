@@ -1544,7 +1544,7 @@ python3 -m py_compile config/scenario_cutin.py config/scenario_lead_brake.py \
 
 ---
 
-### Spawn Fixes — July 2026
+### Spawn Fixes — July 2026 (Round 1)
 
 **Problem:** `TEST_MODE=original` on train000 produced 30/150 "LEAD spawn failed" rows at every 20 km/h cut-out cell, and 30/150 "TARGET spawn failed" rows at every CCRs `approach_d=60 m` cell (both affecting all three controllers identically — confirmed geometry, not controller logic).
 
@@ -1553,7 +1553,7 @@ python3 -m py_compile config/scenario_cutin.py config/scenario_lead_brake.py \
 | Scenario | Cell | Root cause |
 |---|---|---|
 | Cut-out | 20 km/h (all 5 reveal_ttc) | `headway_d = 0.8 × 5.556 = 4.444 m` < combined half-lengths ≈ 4.5 m → bounding-box overlap → CARLA spawn rejection |
-| CCRs | approach_d = 60 m (all 5 speeds, both μ) | Fixed `z = 0.25` falls inside obstacle / below road surface at `(−43.64, −32.74)` on train000 mesh |
+| CCRs | approach_d = 60 m (all 5 speeds, both μ) | Fixed `z = 0.25` falls inside the baked static vehicle at `(−43.64, −32.74)` on train000 mesh |
 
 **Reveal-TTC invariant preserved (cut-out):** `headway_d` cancels in the ego→target surface gap formula; clamping it does not change the TTC at which the target is revealed. ✓
 
@@ -1565,22 +1565,67 @@ python3 -m py_compile config/scenario_cutin.py config/scenario_lead_brake.py \
 | 20 km/h | 1.5–3.0 s | 3.3–11.7 m | Fixed by spawn clamp |
 | 30–60 km/h | all | ≥ 1.7 m | No change needed |
 
-**Modified files:**
+**Modified files (Round 1):**
 
 | File | Change |
 |---|---|
 | `core/runner_cutout.py` | After ego spawn: compute `min_headway = 2×ego_half + SPAWN_CLEARANCE_M`; clamp `headway_d` and recompute `cutout_trigger_d`; if post-clamp trigger surf gap < `MIN_TRIGGER_SURF_GAP_M`, set `result_txt="SCENARIO_INFEASIBLE"` and return early |
-| `core/runner_ccrs.py` | Target spawn: try each z in `cfg.SPAWN_Z_SWEEP` in order; print warning if non-nominal z is used |
+| `core/runner_ccrs.py` | Target spawn: z-sweep `SPAWN_Z_SWEEP` (now superseded — see Round 2) |
 | `config/scenario_cutout.py` | Add `SPAWN_CLEARANCE_M = 0.5` and `MIN_TRIGGER_SURF_GAP_M = 1.0` |
-| `config/scenario_ccrs.py` | Add `SPAWN_Z_SWEEP = [0.25, 0.5, 0.75, 1.0, 1.5]` |
+| `config/scenario_ccrs.py` | Add `SPAWN_Z_SWEEP` (now removed — see Round 2) |
 | `tools/check_cutout_spawn.py` | New — offline per-cell feasibility checker (no CARLA needed) |
 
-**Untouched:** `runner.py`, `runner_lead_brake.py`, `scenario_*.py`, `actors.py`, `conflict.py`, all config files for cut-in / lead-brake, CSV schema, `is_conflict` logic, matrix 5×5×2=50 dimensions.
+---
 
-#### Verify in CARLA (required)
+### Spawn Fixes — July 2026 (Round 2: baked obstacle diagnosis + fail-loud)
 
-1. **Cut-out 20 km/h cells:** run `TEST_MODE=original python run_matrix_cutout.py`. Confirm reveal_ttc ≥ 1.5 rows now produce AVOIDED or COLLISION (not "LEAD spawn failed"). Confirm reveal_ttc=1.0 at 20 km/h shows `result_txt = SCENARIO_INFEASIBLE` in the CSV.
-2. **CCRs 60 m:** run `TEST_MODE=original python run_matrix_ccrs.py`. Watch for `[SPAWN] TARGET spawned at z=X.XX (nominal z=0.25 failed)` in the console. **Visually verify** the target vehicle is sitting on the road surface at `(−43.64, −32.74)` — not floating or buried. If buried at the z chosen, increase `SPAWN_Z_SWEEP` values or nudge the 60 m approach distance to 61–62 m.
-3. **Cut-out 20 km/h headway_d:** confirm the console logs `[SPAWN] headway_d=4.444m < min 5.0m; clamping to 5.0m` for these cells.
+**Problem diagnosed:** The z-sweep added in Round 1 silently placed the CCRS target vehicle on top of the baked static car at approach_d=60 m (spawn accepted at z=0.5 m by sitting on the baked car's collision mesh). This produces invalid geometry — the CCRS target is not on the road. Additionally:
+
+- All train000 spawn z-values are fixed constants that do not vary with (x,y), potentially placing actors underground on uneven 3DGS terrain.
+- The cut-out lead's post-cutout path enters the baked obstacle zone for 2 cells: 50 km/h / reveal_ttc=1.0 (forward extent ≈60.6 m) and 60 km/h / reveal_ttc=1.0 (forward extent ≈66.3 m). The baked car is at ≈60 m forward; the lead is in the right lane (1.5 m lateral) at that point — calculated center-to-center lateral separation ~1.5 m vs combined half-widths ~1.86 m.
+
+**Baked obstacle position:** world coords `(−43.636, −32.741)` = exactly the 60 m point along ego heading from `EGO_SPAWN`. All CCRS target spawns at approach_d=60 m land directly on this obstacle.
+
+**Root cause of z-sweep masking the problem:** `world.try_spawn_actor` uses bounding-box overlap. At z=0.25 the CCRS target overlaps the baked car's main body → rejected. At z=0.5 the target's bounding box barely clears the baked car's collision geometry → accepted. The vehicle is physically sitting on the roof of the baked car, not on road.
+
+**Ground projection (`actors.ground_projection_z`):** uses `world.cast_ray()` downward at (x,y) to find the actual scene surface z. For road points this returns the road surface. For baked-obstacle points it returns the obstacle's roof — which is also above `SPAWN_SURFACE_Z_MAX=2.0 m`, triggering a warning. If CARLA then rejects the spawn (because target+baked-obstacle bounding boxes still overlap even at roof-level z), the code fails loudly with the coordinate and a reference to `probe_spawn_points.py`.
+
+**Post-cutout lead path cap:** `CUTOUT_STOP_MAX_M = 18.0 m` in `config/scenario_cutout.py` hard-stops the lead once it travels 18 m from the trigger point (2-D, any phase). This prevents it from reaching the 60 m baked obstacle zone. Lower speeds (20–40 km/h) naturally stop within 14 m of trigger — unaffected.
+
+**CCRS approach_d=60 m status:** still blocked in config (approach_d=60.0 retained in `APPROACH_DISTANCES` as a placeholder). Must be replaced with a probe-verified clear value (58 m or 62 m) before running the matrix. See `tools/probe_spawn_points.py`.
+
+**Modified files (Round 2):**
+
+| File | Change |
+|---|---|
+| `core/actors.py` | Add `ground_projection_z(world, x, y, probe_z=20.0)` — `world.cast_ray()` helper |
+| `core/runner_ccrs.py` | Replace z-sweep with ground projection + fail-loud (single spawn attempt; no silent relocation) |
+| `core/runner_cutout.py` | Apply ground projection to lead spawn (x,y vary per case) with fail-loud |
+| `core/scenario_cutout.py` | Add `CUTOUT_STOP_MAX_M` hard-stop cap in `update()` (all post-trigger phases) |
+| `config/scenario_ccrs.py` | Remove `SPAWN_Z_SWEEP`; add `SPAWN_SURFACE_Z_MAX=2.0`, `SPAWN_Z_OFFSET=0.5`; add obstacle note to approach_d=60 entry |
+| `config/scenario_cutout.py` | Add `SPAWN_SURFACE_Z_MAX=2.0`, `SPAWN_Z_OFFSET=0.5`, `CUTOUT_STOP_MAX_M=18.0` |
+| `tools/probe_spawn_points.py` | New — CARLA-live coordinate survey; tests CCRS and cut-out spawn points |
+
+**Untouched:** `runner.py`, `runner_lead_brake.py`, `scenario_ccrs.py`, `scenario_cutin.py`, `scenario_lead_brake.py`, `conflict.py`, all config files for cut-in / lead-brake, CSV schema, `is_conflict` logic, matrix 5×5×2=50 dimensions.
+
+#### Verify in CARLA (required before running either matrix)
+
+1. **Run probe utility first:**
+   ```
+   python tools/probe_spawn_points.py
+   ```
+   Confirm approach_d=58 m or 62 m shows CLEAR + reasonable surface_z.  
+   Update `APPROACH_DISTANCES` in `config/scenario_ccrs.py` with that value.  
+   Confirm `CUT_LEAD_PATH_60m_*` rows (right lane at 60 m) show CLEAR or BLOCKED — adjust `CUTOUT_STOP_MAX_M` accordingly.
+
+2. **Cut-out matrix:** run `TEST_MODE=original python run_matrix_cutout.py`. Confirm:
+   - 20 km/h / reveal_ttc≥1.5: AVOIDED or COLLISION (not "LEAD spawn failed")
+   - 20 km/h / reveal_ttc=1.0: `result_txt = SCENARIO_INFEASIBLE` in CSV
+   - Console shows `[LEAD] headway_d=... z=X.XX` (projected z, not fixed constant)
+   - No lead-baked-car collision at 50–60 km/h / reveal_ttc=1.0 (CUTOUT_STOP_MAX_M=18 m cap active)
+
+3. **CCRS matrix:** run `TEST_MODE=original python run_matrix_ccrs.py` after updating approach_d. Confirm:
+   - All 50 cells produce AVOIDED or COLLISION or NO BRAKE (no spawn failures)
+   - Console shows `[SPAWN] BLOCKED ...` for any coordinate still on the baked obstacle
 
 *Last updated: 2026-07-23.*

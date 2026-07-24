@@ -121,6 +121,22 @@ SPAWN_CLEARANCE_M    = 0.5  # m
 #   At 20 km/h + reveal_ttc=1.0 the gap is only 0.556 m (0.10 s); not viable.
 MIN_TRIGGER_SURF_GAP_M = 1.0  # m
 
+# ── 3DGS spawn safety thresholds ─────────────────────────────────────────────
+# SPAWN_SURFACE_Z_MAX: ground_projection_z values above this trigger a warning
+#   that a baked scene obstacle (vehicle roof, wall) may be at the spawn coord.
+# SPAWN_Z_OFFSET: height above projected ground surface for vehicle centre z.
+# CUTOUT_STOP_MAX_M: 2-D distance from trigger position at which the lead is
+#   hard-stopped (brake=1.0, hand_brake=True) regardless of phase.  Prevents
+#   the lead from entering the baked obstacle zone at ~60 m on train000 for the
+#   2 risk cells: 50 km/h/reveal_ttc=1.0 (natural extent ≈60.6 m) and
+#   60 km/h/reveal_ttc=1.0 (natural extent ≈66.3 m).  18 m from trigger point
+#   ensures the lead stops at <59 m from ego for all speeds ≤ 60 km/h.
+#   Has no effect for 20–40 km/h (those cells naturally stop in <14 m from trigger).
+#   Set to None to disable.
+SPAWN_SURFACE_Z_MAX = 2.0   # m world-z
+SPAWN_Z_OFFSET      = 0.5   # m above ground surface for vehicle spawn centre
+CUTOUT_STOP_MAX_M   = 18.0  # m from trigger point; None = unlimited
+
 # ── Target reveal-TTC: primary matrix variable ────────────────────────────────
 # reveal_ttc = surface gap / ego_ms at the instant the lead cut-out triggers.
 # Per case: CUTOUT_TRIGGER_D = (reveal_ttc - FIXED_HEADWAY_THW) × ego_ms + GAP_OFFSET

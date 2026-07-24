@@ -107,15 +107,23 @@ SHOW_WINDOW = True
 # The target is spawned at EGO_SPAWN + approach_d × forward_vector per case.
 # This controls available reaction time (TTC at spawn = (approach_d - GAP_OFFSET) / ego_ms).
 # Matches Euro-NCAP CCRs spirit: varying approach distance = varying available reaction time.
-APPROACH_DISTANCES = [30.0, 40.0, 50.0, 60.0, 70.0]   # m  [TO BE TUNED in CARLA]
+#
+# *** approach_d=60 m BLOCKED ***
+# World coords at 60 m: (-43.636, -32.741) — a baked static vehicle in the train000
+# 3DGS collision mesh sits at this position.  The runner's ground-projection spawn
+# will fail loudly with "TARGET spawn failed" for all 10 cells at 60 m.
+# ACTION: run tools/probe_spawn_points.py, then replace 60.0 below with whichever of
+# 58.0 or 62.0 the probe confirms is on clear road.  Do not change this value without
+# visual verification — the coordinate must be confirmed in CARLA first.
+APPROACH_DISTANCES = [30.0, 40.0, 50.0, 60.0, 70.0]   # m — 60.0 → replace after probe
 
-# ── Robust target spawn: z-sweep ─────────────────────────────────────────────
-# Some positions on the train000 3DGS mesh reject the nominal z=0.25 (bad terrain
-# patch or obstacle at that world coordinate).  The runner tries each z in order;
-# the first successful spawn is used.  A non-nominal z triggers a console warning
-# so the user can verify the placement visually in CARLA.
-# Known issue: approach_d=60 m fails at z=0.25 but succeeds at a higher z.
-SPAWN_Z_SWEEP = [0.25, 0.5, 0.75, 1.0, 1.5]  # m — z values tried in order
+# ── Spawn safety thresholds ───────────────────────────────────────────────────
+# SPAWN_SURFACE_Z_MAX: ground_projection_z values above this trigger a warning that
+#   a baked scene obstacle (vehicle roof, wall, etc.) may be at the spawn coordinate.
+#   Raise this only if legitimate road terrain exceeds 2 m in world-z.
+# SPAWN_Z_OFFSET: height above projected ground surface used as vehicle centre z.
+SPAWN_SURFACE_Z_MAX = 2.0   # m world-z
+SPAWN_Z_OFFSET      = 0.5   # m above ground surface for vehicle spawn centre
 # Surface gaps (approx, GAP_OFFSET ≈ 4.5 m): ~25.5 / ~35.5 / ~45.5 / ~55.5 / ~65.5 m
 # TTC at spawn examples: 30 m + 60 km/h ≈ 1.5 s (hard); 70 m + 20 km/h ≈ 11.8 s (easy)
 # All 5 values are conflict cases: worst-case 70 m @ 20 km/h → t ≈ 11.8 s < 20 s window ✓

@@ -163,15 +163,33 @@ def run_case(sess, cfg, case, controller_name, delay_frames, detector,
         yaw_rad = math.radians(cfg.EGO_SPAWN["yaw"])
         lead_x = cfg.EGO_SPAWN["x"] + headway_d * math.cos(yaw_rad)
         lead_y = cfg.EGO_SPAWN["y"] + headway_d * math.sin(yaw_rad)
+        # Ground-projection for lead: (x,y) changes per case, so the road surface
+        # z may differ from the config constant LEAD_SPAWN["z"]; project to avoid
+        # underground/floating spawns on uneven 3DGS terrain.
+        _surf_z_max = getattr(cfg, "SPAWN_SURFACE_Z_MAX", 2.0)
+        _z_offset   = getattr(cfg, "SPAWN_Z_OFFSET", 0.5)
+        _lead_proj_z = actors.ground_projection_z(world, lead_x, lead_y)
+        if _lead_proj_z is None:
+            _lead_z = cfg.LEAD_SPAWN["z"]
+        else:
+            if _lead_proj_z > _surf_z_max:
+                print(f"[SPAWN] WARNING: lead surface at ({lead_x:.2f},{lead_y:.2f}) "
+                      f"z={_lead_proj_z:.2f} > SPAWN_SURFACE_Z_MAX={_surf_z_max:.2f} "
+                      f"— possible obstacle at headway_d={headway_d:.1f}m")
+            _lead_z = _lead_proj_z + _z_offset
         lead = actors.spawn_vehicle(
             world, x=lead_x, y=lead_y,
-            z=cfg.LEAD_SPAWN["z"], yaw=cfg.LEAD_SPAWN["yaw"],
+            z=_lead_z, yaw=cfg.LEAD_SPAWN["yaw"],
             model=cfg.LEAD_SPAWN["model"])
         if not lead:
+            _proj_str = f"{_lead_proj_z:.2f}" if _lead_proj_z is not None else "n/a"
+            print(f"[SPAWN] BLOCKED: CARLA rejected LEAD at "
+                  f"({lead_x:.2f},{lead_y:.2f},z={_lead_z:.2f}) [proj_z={_proj_str}]. "
+                  f"Possible terrain obstacle at headway_d={headway_d:.1f}m from ego.")
             rec.result_txt = "LEAD spawn failed"; return rec, None
         actor_list.append(lead)
         lead.apply_control(carla.VehicleControl(brake=1.0, hand_brake=True))
-        print(f"[LEAD] headway_d={headway_d:.1f}m → spawn ({lead_x:.2f}, {lead_y:.2f})")
+        print(f"[LEAD] headway_d={headway_d:.1f}m → spawn ({lead_x:.2f}, {lead_y:.2f}, z={_lead_z:.2f})")
 
         # ── TARGET (stationary) ──
         target = actors.spawn_vehicle(world, **cfg.TARGET_SPAWN)

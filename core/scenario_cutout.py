@@ -97,6 +97,20 @@ class CutOutScenario:
         just_triggered = False
         v = speed_ms(self.lead)
 
+        # ── Hard-stop cap (any post-trigger phase) ────────────────────────────
+        # If CUTOUT_STOP_MAX_M is set in config, lock the lead once its 2-D
+        # displacement from the trigger position exceeds that distance.
+        # Prevents the lead from entering baked-obstacle zones (e.g. the parked
+        # car at ~60 m on train000) for high-speed, short-reveal_ttc cells where
+        # the lead would otherwise coast past the obstacle region after cut-out.
+        _stop_max = getattr(self.cfg, "CUTOUT_STOP_MAX_M", None)
+        if _stop_max is not None and self._phase != _CRUISE:
+            loc = self.lead.get_location()
+            if math.hypot(loc.x - self._tx, loc.y - self._ty) >= _stop_max:
+                self.lead.apply_control(
+                    carla.VehicleControl(brake=1.0, hand_brake=True, throttle=0.0))
+                return just_triggered
+
         # ── CRUISE phase ──────────────────────────────────────────────────────
         if self._phase == _CRUISE:
             if dist2d(self.lead, self.target) <= self._trigger_d:

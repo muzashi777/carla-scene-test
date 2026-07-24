@@ -60,6 +60,7 @@ perception/
 tools/
   check_conflict.py        ★ Verify is_conflict for all 4 scenario matrices (no CARLA needed)
   check_cutout_spawn.py    ★ Cut-out spawn feasibility per cell (no CARLA needed; see §Spawn Notes)
+  probe_spawn_points.py    ★ Survey CCRS + cut-out spawn coordinates with live CARLA (run before matrix)
 run_single.py              Cut-in: run 1 case with OpenCV display
 run_matrix.py              Cut-in: sweep full matrix → results/matrix_*.csv
 run_single_lead.py         Lead-brake: run 1 case with display
