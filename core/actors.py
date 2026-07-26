@@ -141,24 +141,16 @@ def spawn_vehicle(world, x, y, z, yaw, model="vehicle.*"):
 _SPAWN_XY_TOL = 0.1  # m — max allowed x,y drift after spawn
 
 
+# ── DEPRECATED spawn helpers (Rounds 1–5) ────────────────────────────────────
+# spawn_fixed_road_z, spawn_ground_projected, and ground_projection_z were
+# added incrementally during Rounds 1–5 to work around 3DGS mesh instability.
+# All three are no longer called; runners use spawn_vehicle() directly with the
+# fixed config z values (ego z=0.79, target/cutout-ego z=0.25, lead z=0.79).
+# Kept here for reference only — do not use in new code.
+
+
 def spawn_fixed_road_z(world, x, y, road_z, yaw, label="", model="vehicle.*"):
-    """Spawn a vehicle at a known fixed road surface z — no cast_ray.
-
-    Used for train000 where world.cast_ray() is unreliable: the 3DGS collision
-    mesh returns inconsistent surface z values across runs for the same (x,y)
-    (anywhere from −1.97 to −0.57), making any absolute threshold unworkable.
-
-    Spawn centre at road_z + 1.0 m so the vehicle sits clearly above the road
-    surface regardless of the vehicle's bounding-box extent (Audi TT extent.z
-    ≈ 0.75 m → bottom at road_z + 0.25 m; physics settles it onto the road).
-
-    Obstacle gate: world.try_spawn_actor overlap is the ONLY test.  A baked
-    vehicle at the spawn position causes CARLA to reject the spawn (returns None)
-    → status "BLOCKED(overlap)".
-
-    Returns (actor_or_None, status_str) with the same contract as
-    spawn_ground_projected.  Always prints one [SPAWN] log line.
-    """
+    """DEPRECATED — see spawn_vehicle(). Spawns at road_z + 1.0 m; no longer used."""
     spawn_z = road_z + 1.0
     actor = spawn_vehicle(world, x=x, y=y, z=spawn_z, yaw=yaw, model=model)
     if actor is None:
@@ -184,10 +176,7 @@ def spawn_fixed_road_z(world, x, y, road_z, yaw, label="", model="vehicle.*"):
 
 
 def spawn_ground_projected(world, x, y, z_nom, yaw, cfg, label="", model="vehicle.*"):
-    """Ground-projected vehicle spawn via cast_ray — for scenes with reliable collision meshes.
-
-    NOT used for train000: cast_ray is unreliable on the 3DGS mesh (returns
-    inconsistent surface z).  Use spawn_fixed_road_z() for train000 instead.
+    """DEPRECATED — see spawn_vehicle(). Ground-projected spawn via cast_ray; unreliable on 3DGS.
 
     Steps:
       1. Cast a downward ray to find the road-surface z.
@@ -247,15 +236,7 @@ def spawn_ground_projected(world, x, y, z_nom, yaw, cfg, label="", model="vehicl
 
 
 def ground_projection_z(world, x, y, probe_z=20.0):
-    """Cast a vertical ray at (x, y) and return the z of the first surface hit, or None.
-
-    Uses world.cast_ray() which works on any collision mesh including 3DGS scenes.
-    The returned z is whatever surface is highest at that (x,y) — road, baked vehicle
-    roof, raised kerb, etc.  Callers should validate the result against SPAWN_SURFACE_Z_MAX
-    to flag suspiciously high hits that indicate a baked scene obstacle rather than road.
-
-    Returns None if cast_ray is unavailable (CARLA < 0.9.10) or hits nothing.
-    """
+    """DEPRECATED — see spawn_vehicle(). cast_ray unreliable on 3DGS; returns None-or-z."""
     try:
         hits = world.cast_ray(
             carla.Location(x=float(x), y=float(y), z=float(probe_z)),

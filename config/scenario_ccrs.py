@@ -117,23 +117,6 @@ SHOW_WINDOW = True
 # visual verification — the coordinate must be confirmed in CARLA first.
 APPROACH_DISTANCES = [30.0, 40.0, 50.0, 62.0, 70.0]   # m — 60.0 → replace after probe
 
-# ── Spawn strategy for train000 (fixed road z, no cast_ray) ──────────────────
-# world.cast_ray() is unreliable on the 3DGS mesh: the same (x,y) returns
-# surface z anywhere from −1.97 to −0.57 across runs (floating mesh layers).
-# No absolute threshold can separate road from obstacle when the road itself
-# reads in that range.
-#
-# Solution: abandon per-point cast_ray.  Use a single fixed road z measured
-# empirically from the old probe (−1.94 to −1.97 across all car positions;
-# 3 cm spread → flat road → single value is safe).
-# Spawning at road_z + 1.0 m puts the vehicle clearly above the mesh
-# (Audi TT extent.z ≈ 0.75 m → bottom at road_z + 0.25 m; physics settles it).
-# Obstacle gate: try_spawn_actor overlap only — baked car at 60 m blocks
-# spawns there; clear road points (30/40/50/62/70 m) spawn fine.
-SPAWN_ROAD_Z = -1.95   # m — empirically measured train000 road surface z
-# Surface gaps (approx, GAP_OFFSET ≈ 4.5 m): ~25.5 / ~35.5 / ~45.5 / ~55.5 / ~65.5 m
-# TTC at spawn examples: 30 m + 60 km/h ≈ 1.5 s (hard); 70 m + 20 km/h ≈ 11.8 s (easy)
-# All 5 values are conflict cases: worst-case 70 m @ 20 km/h → t ≈ 11.8 s < 20 s window ✓
 
 # ══════════════════════════════════════════════════════════════════
 #  TEST MATRIX for run_matrix_ccrs.py  (5 speed × 5 distance × 2 μ = 50 cases/controller)

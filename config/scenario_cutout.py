@@ -121,21 +121,8 @@ SPAWN_CLEARANCE_M    = 0.5  # m
 #   At 20 km/h + reveal_ttc=1.0 the gap is only 0.556 m (0.10 s); not viable.
 MIN_TRIGGER_SURF_GAP_M = 1.0  # m
 
-# ── Spawn strategy for train000 (fixed road z, no cast_ray) ──────────────────
-# world.cast_ray() is unreliable on the 3DGS mesh: the same (x,y) returns
-# surface z anywhere from −1.97 to −0.57 across runs (floating mesh layers).
-# No absolute threshold can separate road from obstacle when the road itself
-# reads in that range.
-#
-# Solution: abandon per-point cast_ray.  Use a single fixed road z measured
-# empirically (−1.94 to −1.97 across all car positions; flat road → safe).
-# Spawning at road_z + 1.0 m puts the vehicle clearly above the mesh
-# (Audi TT extent.z ≈ 0.75 m → bottom at road_z + 0.25 m; physics settles it).
-# Obstacle gate: try_spawn_actor overlap only.
-#
 # CUTOUT_STOP_MAX_M: hard-stop the lead this many metres past the trigger point
 # to prevent it entering the baked obstacle zone at ~60 m on train000.
-SPAWN_ROAD_Z      = -1.95   # m — empirically measured train000 road surface z
 CUTOUT_STOP_MAX_M = 18.0    # m from trigger point; None = unlimited
 
 # ── Target reveal-TTC: primary matrix variable ────────────────────────────────

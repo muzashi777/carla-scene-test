@@ -1832,3 +1832,53 @@ python3 tools/check_conflict.py
 ```
 
 *Last updated: 2026-07-24.*
+
+---
+
+### Spawn Revert — July 2026 (back to original fixed-config-z)
+
+**Problem:** After Rounds 1–5, both train000 matrices produced `result_txt = "EGO spawn failed"` on **all 150 rows**. Round 5's `spawn_fixed_road_z()` spawned all actors at `SPAWN_ROAD_Z + 1.0 = −0.95 m`. This z is inside 3DGS scene geometry at every (x,y) position, causing `try_spawn_actor` to return None for the ego itself — before any target or lead is attempted.
+
+**Root cause of the entire Rounds 1–5 cascade:** The original spawn (fixed config z from `EGO_SPAWN.z` / `TARGET_SPAWN.z` / `LEAD_SPAWN.z`) worked on every case in the first successful run (`ccrs_matrix_original_120346`). The only real spawn failure in that run was `approach_d = 60 m` — a baked static vehicle at world coords `(−43.636, −32.741)`. All subsequent spawn machinery (z-sweep → ground projection → z-threshold → fixed-road-z) was added to fix a problem that did not exist at the positions used, and each layer introduced new failures.
+
+**Fix:** Revert to the original simple `actors.spawn_vehicle(world, **cfg.EGO_SPAWN)` pattern. No cast_ray, no SPAWN_ROAD_Z, no spawn_fixed_road_z, no z sweep or threshold. The config z values (ego z=0.79, target/cutout-ego z=0.25, lead z=0.79) are what worked in the first run and are the correct values.
+
+**Why cast_ray / computed z is wrong for this scene:** `world.cast_ray()` on the train000 3DGS mesh returns inconsistent surface z across runs for the same (x,y) — ranging from −1.97 to −0.57 m depending on which floating mesh layer the ray hits. Any computed z (cast_ray-based or fixed-road-z) either overshoots into scene geometry or undershoots underground. The only z values that are confirmed to work are the empirically-confirmed original config values.
+
+**Sole real fix retained:** `approach_d = 62.0 m` (replaces the blocked 60.0 m). Also retained from Round 1: the 20 km/h headway clamp + `SCENARIO_INFEASIBLE` gate and `CUTOUT_STOP_MAX_M = 18.0` in the cut-out runner — these address real, spawn-unrelated geometry constraints.
+
+**Modified files:**
+
+| File | Change |
+|---|---|
+| `core/runner_ccrs.py` | EGO + TARGET spawns: `spawn_fixed_road_z(cfg.SPAWN_ROAD_Z, ...)` → `spawn_vehicle(world, **cfg.EGO_SPAWN)` / `spawn_vehicle(world, **target_spawn)` |
+| `core/runner_cutout.py` | EGO + LEAD + TARGET spawns: same revert; headway clamp and SCENARIO_INFEASIBLE gate preserved |
+| `config/scenario_ccrs.py` | Remove `SPAWN_ROAD_Z` block (approach_d=62 retained) |
+| `config/scenario_cutout.py` | Remove `SPAWN_ROAD_Z` (CUTOUT_STOP_MAX_M=18 retained) |
+| `core/actors.py` | `spawn_fixed_road_z`, `spawn_ground_projected`, `ground_projection_z` marked deprecated; not called |
+| `README.md` | §Spawn Safety rewritten: documents original fixed-z approach and why per-point cast_ray is unreliable on this scene |
+
+**Untouched:** `runner.py`, `runner_lead_brake.py`, all scene03_2 spawns, `conflict.py`, `metrics.py`, CSV schema, matrix dimensions (5×5×2=50), controller logic, `CUTOUT_STOP_MAX_M`, occlusion gate, spectator setup, viz, `MATRIX_VIZ`, `TEST_MODE`.
+
+#### Expected spawn output after revert
+
+CCRS matrix (all approach_d = 30/40/50/62/70 m, all speeds, all μ):
+```
+[SPAWN] EGO blocked at (6.420,0.340,0.790)          ← never fires; ego spawns OK every time
+[SPAWN] TARGET blocked at (-43.636,-32.741,0.250) ... ← never fires; approach_d=60 not in matrix
+```
+Expected: **0 spawn failures** across all 150 CCRS rows (50 per controller × 3 controllers).
+
+Cut-out: ego + lead + target spawn OK on all cells except 20 km/h / reveal_ttc=1.0 → `SCENARIO_INFEASIBLE` (headway clamp geometry — same as Round 1, not a spawn failure).
+
+#### Verification (no CARLA)
+
+```bash
+python3 -m py_compile core/actors.py core/runner_ccrs.py core/runner_cutout.py \
+    config/scenario_ccrs.py config/scenario_cutout.py
+
+python3 tools/check_conflict.py
+# Expected: cut-in 50/50, lead-brake 50/50, CCRs 50/50, cut-out 50/50 = 200/200 conflict
+```
+
+*Last updated: 2026-07-26.*

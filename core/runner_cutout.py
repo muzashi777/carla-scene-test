@@ -126,12 +126,9 @@ def run_case(sess, cfg, case, controller_name, delay_frames, detector,
 
     try:
         # ── EGO ──
-        ego, _ego_status = actors.spawn_fixed_road_z(
-            world, cfg.EGO_SPAWN["x"], cfg.EGO_SPAWN["y"],
-            cfg.SPAWN_ROAD_Z, cfg.EGO_SPAWN["yaw"],
-            label="[CUTOUT] EGO",
-        )
-        if ego is None:
+        ego = actors.spawn_vehicle(world, **cfg.EGO_SPAWN)
+        if not ego:
+            print(f"[SPAWN] EGO blocked at ({cfg.EGO_SPAWN['x']:.3f},{cfg.EGO_SPAWN['y']:.3f},{cfg.EGO_SPAWN['z']:.3f})")
             rec.result_txt = "EGO spawn failed"; return rec, None
         actor_list.append(ego)
         ego.apply_control(carla.VehicleControl(brake=1.0, hand_brake=True))
@@ -167,35 +164,23 @@ def run_case(sess, cfg, case, controller_name, delay_frames, detector,
         yaw_rad = math.radians(cfg.EGO_SPAWN["yaw"])
         lead_x = cfg.EGO_SPAWN["x"] + headway_d * math.cos(yaw_rad)
         lead_y = cfg.EGO_SPAWN["y"] + headway_d * math.sin(yaw_rad)
-        _co_case_label = (f"[CUTOUT] ego{case['ego_speed_kmh']:.0f}_"
-                          f"ttc{case.get('reveal_ttc', '?')}_"
-                          f"mu{case['mu']}")
-        lead, _lead_status = actors.spawn_fixed_road_z(
-            world,
-            x=lead_x, y=lead_y,
-            road_z=cfg.SPAWN_ROAD_Z, yaw=cfg.LEAD_SPAWN["yaw"],
-            label=_co_case_label,
-            model=cfg.LEAD_SPAWN["model"],
-        )
-        if lead is None:
-            print(f"[SPAWN]   {_lead_status} — headway_d={headway_d:.1f}m. "
-                  f"Run tools/probe_spawn_points.py to find a clear road coordinate.")
+        lead = actors.spawn_vehicle(
+            world, x=lead_x, y=lead_y,
+            z=cfg.LEAD_SPAWN["z"], yaw=cfg.LEAD_SPAWN["yaw"],
+            model=cfg.LEAD_SPAWN["model"])
+        if not lead:
+            print(f"[SPAWN] LEAD blocked at ({lead_x:.3f},{lead_y:.3f},{cfg.LEAD_SPAWN['z']:.3f}) "
+                  f"— headway_d={headway_d:.1f}m")
             rec.result_txt = "SPAWN_BLOCKED"
             return rec, None
         actor_list.append(lead)
         lead.apply_control(carla.VehicleControl(brake=1.0, hand_brake=True))
-        _lead_final = lead.get_location()
-        print(f"[LEAD] headway_d={headway_d:.1f}m → spawn ({lead_x:.3f},{lead_y:.3f},z={_lead_final.z:.3f})")
+        print(f"[LEAD] headway_d={headway_d:.1f}m → spawn ({lead_x:.2f}, {lead_y:.2f})")
 
         # ── TARGET (stationary) ──
-        target, _target_status = actors.spawn_fixed_road_z(
-            world,
-            x=cfg.TARGET_SPAWN["x"], y=cfg.TARGET_SPAWN["y"],
-            road_z=cfg.SPAWN_ROAD_Z, yaw=cfg.TARGET_SPAWN["yaw"],
-            label=f"{_co_case_label}_TARGET",
-            model=cfg.TARGET_SPAWN.get("model", "vehicle.*"),
-        )
-        if target is None:
+        target = actors.spawn_vehicle(world, **cfg.TARGET_SPAWN)
+        if not target:
+            print(f"[SPAWN] TARGET blocked at ({cfg.TARGET_SPAWN['x']:.3f},{cfg.TARGET_SPAWN['y']:.3f},{cfg.TARGET_SPAWN['z']:.3f})")
             rec.result_txt = "TARGET spawn failed"; return rec, None
         actor_list.append(target)
         target.apply_control(carla.VehicleControl(brake=1.0, hand_brake=True))

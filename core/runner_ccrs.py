@@ -101,12 +101,9 @@ def run_case(sess, cfg, case, controller_name, delay_frames, detector,
 
     try:
         # ── EGO ──
-        ego, _ego_status = actors.spawn_fixed_road_z(
-            world, cfg.EGO_SPAWN["x"], cfg.EGO_SPAWN["y"],
-            cfg.SPAWN_ROAD_Z, cfg.EGO_SPAWN["yaw"],
-            label="[CCRS] EGO",
-        )
-        if ego is None:
+        ego = actors.spawn_vehicle(world, **cfg.EGO_SPAWN)
+        if not ego:
+            print(f"[SPAWN] EGO blocked at ({cfg.EGO_SPAWN['x']:.3f},{cfg.EGO_SPAWN['y']:.3f},{cfg.EGO_SPAWN['z']:.3f})")
             rec.result_txt = "EGO spawn failed"; return rec, None
         actor_list.append(ego)
         ego.apply_control(carla.VehicleControl(brake=1.0, hand_brake=True))
@@ -118,19 +115,10 @@ def run_case(sess, cfg, case, controller_name, delay_frames, detector,
             target_spawn["x"] = case["target_x"]
             target_spawn["y"] = case["target_y"]
 
-        _case_label = (f"[CCRS] ego{case['ego_speed_kmh']:.0f}_"
-                       f"ad{case.get('approach_d', '?')}_"
-                       f"mu{case['mu']}")
-        target, _spawn_status = actors.spawn_fixed_road_z(
-            world,
-            x=target_spawn["x"], y=target_spawn["y"],
-            road_z=cfg.SPAWN_ROAD_Z, yaw=target_spawn["yaw"],
-            label=_case_label,
-            model=target_spawn.get("model", "vehicle.*"),
-        )
-        if target is None:
-            print(f"[SPAWN]   {_spawn_status} — approach_d={case.get('approach_d', '?')}m. "
-                  f"Run tools/probe_spawn_points.py to find a clear road coordinate.")
+        target = actors.spawn_vehicle(world, **target_spawn)
+        if not target:
+            print(f"[SPAWN] TARGET blocked at ({target_spawn['x']:.3f},{target_spawn['y']:.3f},{target_spawn['z']:.3f}) "
+                  f"— approach_d={case.get('approach_d', '?')}m (baked obstacle at this position?)")
             rec.result_txt = "SPAWN_BLOCKED"
             return rec, None
         actor_list.append(target)
