@@ -70,6 +70,7 @@ class CutOutScenario:
         self._tx = self._ty = 0.0  # trigger position (world frame)
 
         self._backstop_fired = False  # True once no-hit safety backstop engages
+        self._ever_cleared   = False  # latches True the first tick the lead clears the ego lane
 
     @property
     def phase(self):
@@ -103,31 +104,44 @@ class CutOutScenario:
         just_triggered = False
         v = speed_ms(self.lead)
 
-        # ── Safety backstop: lead must never hit the target (B4) ─────────────
-        # If the lead has not yet cleared the ego lane when it gets dangerously
-        # close to the target, brake to a stop rather than collide.
-        if not self._backstop_fired and self._phase in (_STEER, _STRAIGHTEN):
+        # ── Lane-cleared latch ─────────────────────────────────────────────────
+        # Latches True once the lead has moved far enough right to leave the ego
+        # lane (lateral ≥ CUTOUT_LANE_WIDTH + CUTOUT_CLEAR_MARGIN_M).  Also
+        # latches when entering SETTLED since that phase implies the arc finished.
+        # Once True it never resets: brief dips during STRAIGHTEN (P-controller
+        # overshoot) cannot re-enable in-lane braking.
+        if not self._ever_cleared and self._phase != _CRUISE:
+            _cm = getattr(self.cfg, "CUTOUT_CLEAR_MARGIN_M", 0.0)
+            if (self._lateral_offset() >= self.cfg.CUTOUT_LANE_WIDTH + _cm
+                    or self._phase == _SETTLED):
+                self._ever_cleared = True
+                print(f"[CUTOUT] Lane cleared: lat={self._lateral_offset():.2f}m "
+                      f">= {self.cfg.CUTOUT_LANE_WIDTH + _cm:.2f}m  phase={self._phase}")
+
+        # ── Safety backstop: ONLY fires after lane is cleared (B4) ───────────
+        # Stops the lead from hitting the target once it is safely in the right
+        # lane.  Must NOT fire while the lead is still in the ego lane — doing
+        # so would stop it mid-arc and leave it as an in-path obstacle.
+        # If geometry prevents both clearing and stopping short, the cell is
+        # SCENARIO_INFEASIBLE (detected offline by check_cutout_spawn.py).
+        if self._ever_cleared and not self._backstop_fired:
             _bs = getattr(self.cfg, "CUTOUT_SAFETY_BACKSTOP_M", 5.0)
-            if (self._lateral_offset() < self.cfg.CUTOUT_LANE_WIDTH and
-                    dist2d(self.lead, self.target) < _bs):
+            if dist2d(self.lead, self.target) < _bs:
                 self._backstop_fired = True
-                print(f"[SAFETY] Lead not cleared "
-                      f"(lat={self._lateral_offset():.2f}m < {self.cfg.CUTOUT_LANE_WIDTH}m) "
-                      f"at dist={dist2d(self.lead, self.target):.2f}m < {_bs}m — "
-                      f"emergency brake; lead stops short of target")
+                print(f"[SAFETY] Lane cleared; lead dist={dist2d(self.lead, self.target):.2f}m "
+                      f"< {_bs}m backstop — brake (lead is out of ego lane)")
         if self._backstop_fired:
             self.lead.apply_control(
                 carla.VehicleControl(brake=1.0, hand_brake=True, throttle=0.0))
             return just_triggered
 
-        # ── Hard-stop cap (any post-trigger phase) ────────────────────────────
-        # If CUTOUT_STOP_MAX_M is set in config, lock the lead once its 2-D
-        # displacement from the trigger position exceeds that distance.
-        # Prevents the lead from entering baked-obstacle zones (e.g. the parked
-        # car at ~60 m on train000) for high-speed, short-reveal_ttc cells where
-        # the lead would otherwise coast past the obstacle region after cut-out.
+        # ── Hard-stop cap: ONLY fires after lane is cleared ───────────────────
+        # Locks the lead once its 2-D displacement from the trigger position
+        # exceeds CUTOUT_STOP_MAX_M.  Prevents the lead from entering baked-
+        # obstacle zones after cut-out.  Gated on _ever_cleared so it cannot
+        # fire mid-arc and stop the lead in the ego lane.
         _stop_max = getattr(self.cfg, "CUTOUT_STOP_MAX_M", None)
-        if _stop_max is not None and self._phase != _CRUISE:
+        if _stop_max is not None and self._ever_cleared:
             loc = self.lead.get_location()
             if math.hypot(loc.x - self._tx, loc.y - self._ty) >= _stop_max:
                 self.lead.apply_control(

@@ -1943,7 +1943,7 @@ All 25 cells pass `arc_ok=YES` (trigger_d ≥ arc_fwd_est ≈ 5.2 m). The previo
 STEER and STRAIGHTEN phases now use `_ctrl_speed_steer()` — the same P-controller as CRUISE (`_ctrl_cruise`) but with the steer command. It applies active braking on overspeed, maintaining the lead's speed through the arc and preventing the ego from rear-ending a decelerating lead.
 
 **B4 — No-hit safety backstop (`CUTOUT_SAFETY_BACKSTOP_M = 5.0 m`):**  
-If the lead has not reached `CUTOUT_LANE_WIDTH` lateral offset when `dist(lead, target) < CUTOUT_SAFETY_BACKSTOP_M`, an emergency full brake is applied. The run is flagged in the log with `[SAFETY]`. Any case where this fires indicates tuning is needed.
+Once the lead has **cleared the ego lane** (`lateral_offset ≥ CUTOUT_LANE_WIDTH + CUTOUT_CLEAR_MARGIN_M`), if `dist(lead, target) < CUTOUT_SAFETY_BACKSTOP_M` an emergency full brake is applied. The backstop **never fires while the lead is still in the ego lane** — that would stop it mid-arc as an in-path obstacle. The log prints `[CUTOUT] Lane cleared` when the latch fires, and `[SAFETY]` when the backstop fires.
 
 **Ego-perceives-lead (decided):**  
 While the target is occluded by the lead, the ego's AEB perceives the **lead** as the in-path obstacle (car-following with lead's actual gap/speed). When the lead cuts out and the occlusion gate opens, the ego re-targets the stationary target. Controller thresholds are unchanged; only the perceived obstacle switches.
@@ -1959,7 +1959,9 @@ While the target is occluded by the lead, the ego's AEB perceives the **lead** a
 | Arc oscillates | `CUTOUT_STEER_K` ↓ | Decrease | Lower P-gain on heading error |
 | Ego too close to lead at low speed | `MIN_HEADWAY_M` ↑ | Increase | Keep below ego_ms × min(reveal_ttc) in time |
 | Speed droop mid-turn | `LEAD_SPEED_K` ↑ | Increase | Higher P-gain on longitudinal control |
-| Safety backstop fires unexpectedly | `CUTOUT_SAFETY_BACKSTOP_M` ↓ | Decrease | Only if sure arc completes; increase if lead too close |
+| Backstop fires before lane fully clear | `CUTOUT_CLEAR_MARGIN_M` ↑ | Increase | Delays backstop/cap until lat ≥ 1.5 + margin |
+| Lead passes too close after clearing | `CUTOUT_SAFETY_BACKSTOP_M` ↑ | Increase | Fires backstop earlier (more surface gap before stop) |
+| Lead stops too far short after clearing | `CUTOUT_SAFETY_BACKSTOP_M` ↓ | Decrease | Only if sure arc fully completes with margin |
 
 **Final numeric values are set in CARLA** — these are starting points only.
 
@@ -1968,12 +1970,12 @@ While the target is occluded by the lead, the ego's AEB perceives the **lead** a
 | File | Change |
 |---|---|
 | `config/scenario_ccrs.py` | Fixed-target design comment; approach_d comment updated |
-| `config/scenario_cutout.py` | Add `MIN_HEADWAY_M`, `CUTOUT_TRIGGER_TTC`, `CUTOUT_SAFETY_BACKSTOP_M`; update headway/trigger/matrix comments |
+| `config/scenario_cutout.py` | Add `MIN_HEADWAY_M`, `CUTOUT_TRIGGER_TTC`, `CUTOUT_SAFETY_BACKSTOP_M`, `CUTOUT_CLEAR_MARGIN_M`; update headway/trigger/matrix comments |
 | `run_matrix_ccrs.py` | `build_cases()`: fixed target + per-case ego sweep; per-case spectator update |
 | `run_matrix_cutout.py` | `build_cases()`: headway floor + TTC-based trigger formula |
 | `core/runner_ccrs.py` | Spawn ego at `case["ego_x"/"ego_y"]`; log ego spawn position per case |
 | `core/runner_cutout.py` | Headway floor + TTC trigger in fallback formula; ego-perceives-lead logic; fix latent `headway_thw` NameError |
-| `core/scenario_cutout.py` | `_ctrl_speed_steer()` (B3 speed hold); safety backstop (B4); `phase` property |
+| `core/scenario_cutout.py` | `_ctrl_speed_steer()` (B3 speed hold); safety backstop (B4); `phase` property; `_ever_cleared` lane-clear latch; backstop and cap gated on lane-cleared |
 | `tools/check_cutout_spawn.py` | Extended with TTC floor analysis, arc clearance check, actual_reveal_ttc column |
 
 **Untouched:** `runner.py`, `runner_lead_brake.py`, `scenario_ccrs.py` logic, all scene03_2 spawns, `conflict.py`, `metrics.py`, CSV schema, matrix dimensions (5×5×2=50), controller logic, occlusion gate, viz colours, `CUTOUT_STOP_MAX_M`.

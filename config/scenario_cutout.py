@@ -130,12 +130,20 @@ MIN_TRIGGER_SURF_GAP_M = 1.0  # m
 # to prevent it entering the baked obstacle zone at ~60 m on train000.
 CUTOUT_STOP_MAX_M = 18.0    # m from trigger point; None = unlimited
 
-# CUTOUT_SAFETY_BACKSTOP_M: if the lead is still in the ego lane (lateral_offset <
-# CUTOUT_LANE_WIDTH) when its center-to-center distance to the target falls below
-# this value, apply an emergency full brake to stop short of the target.
-# This is a guaranteed backstop against the lead ramming the target. Any case where
-# it fires is flagged in the runner log. [TO BE TUNED in CARLA]
+# CUTOUT_SAFETY_BACKSTOP_M: after the lane is cleared (lateral_offset ≥
+# CUTOUT_LANE_WIDTH + CUTOUT_CLEAR_MARGIN_M), if the lead's center-to-center distance
+# to the target is below this value it brakes to a stop. This prevents the lead from
+# hitting the target AFTER it has already cleared the ego lane.
+# *** ONLY fires after lane-cleared — never in-lane (see CUTOUT_CLEAR_MARGIN_M). ***
+# [TO BE TUNED in CARLA]
 CUTOUT_SAFETY_BACKSTOP_M = 5.0  # m — center-to-center threshold (≈ 0.5 m surface gap)
+
+# CUTOUT_CLEAR_MARGIN_M: additional margin beyond CUTOUT_LANE_WIDTH required before any
+# stop mechanism (backstop, CUTOUT_STOP_MAX_M cap, CUTOUT_AFTER_STOP) may fire.
+# "Lane cleared" = lateral_offset ≥ CUTOUT_LANE_WIDTH + CUTOUT_CLEAR_MARGIN_M.
+# 0.0 = exact threshold; increase if you want the lead fully out before it can stop.
+# [TO BE TUNED in CARLA — start at 0.0]
+CUTOUT_CLEAR_MARGIN_M    = 0.0  # m
 
 # ── Target reveal-TTC: primary matrix variable ────────────────────────────────
 # reveal_ttc = surface gap / ego_ms at the instant the lead cut-out triggers.
