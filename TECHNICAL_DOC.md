@@ -1997,3 +1997,82 @@ python3 tools/check_conflict.py
 ```
 
 *Last updated: 2026-07-26.*
+
+---
+
+### Revision — Cut-out lane-clear gating (2026-07-26)
+
+#### Bug and root cause
+
+**Symptom:** at low speed the lead stopped in the ego lane, blocking the target.
+
+**Root cause:** the safety backstop (B4) added in the previous revision fired **before** the lead cleared the ego lane. The backstop condition was:
+
+```
+phase in (STEER, STRAIGHTEN)  AND  lateral_offset < CUTOUT_LANE_WIDTH  AND  dist(lead, target) < 5.0 m
+```
+
+At 20 km/h (trigger_d = 8.33 m), after ~3.3 m of forward travel the lead is 5.0 m from the target but only ~0.9 m laterally offset (< 1.5 m). The backstop fired, latched `_backstop_fired = True`, and applied `brake=1.0, hand_brake=True` every subsequent tick — stopping the lead mid-arc at a fixed 5.0 m from the target.
+
+This is why raising `CUTOUT_STOP_MAX_M` (18 → 50 m) had no effect: the backstop (mechanism 1) fired at a fixed distance from the target before the cap (mechanism 2, triggered at 18 m from the trigger point) could ever reach its threshold.
+
+At higher speeds trigger_d is much larger (e.g., 25 m at 60 km/h), so the lead cleared 1.5 m laterally (~5.2 m forward travel) long before the 5.0 m backstop threshold — the bug was speed-dependent and only visible at low speed.
+
+#### Fix — `_ever_cleared` latch
+
+`self._ever_cleared = False` added in `__init__`. At the top of every `update()` tick it latches to `True` the first time:
+
+```
+lateral_offset >= CUTOUT_LANE_WIDTH + CUTOUT_CLEAR_MARGIN_M
+```
+
+or when the phase enters `_SETTLED` (belt-and-suspenders). Once latched it never resets — brief lateral dips during STRAIGHTEN (P-controller overshoot) cannot re-enable in-lane braking.
+
+Both stop/brake mechanisms are now gated on `_ever_cleared`:
+
+| Mechanism | Old gate | New gate |
+|---|---|---|
+| Safety backstop (`CUTOUT_SAFETY_BACKSTOP_M`) | fires in STEER/STRAIGHTEN **if not yet cleared** | fires **only after** `_ever_cleared` |
+| Hard-stop cap (`CUTOUT_STOP_MAX_M`) | fires if `phase != CRUISE` | fires **only after** `_ever_cleared` |
+| SETTLED / `CUTOUT_AFTER_STOP` | entered after STRAIGHTEN (implicitly clear) | unchanged |
+
+#### New config constant
+
+```python
+CUTOUT_CLEAR_MARGIN_M = 0.0   # m — extra margin beyond CUTOUT_LANE_WIDTH before
+                               # backstop/cap may fire.  0.0 = exact threshold.
+                               # Increase to 0.2–0.5 m if backstop fires when lead
+                               # is borderline (briefly dips back below threshold
+                               # during STRAIGHTEN).  Start at 0.0.
+```
+
+#### Per-speed clearance
+
+All 25 cells already passed `arc_ok=YES` (trigger_d ≥ arc_fwd_est ≈ 5.2 m). With lane-clear gating the arc always completes before any stop fires — no new SCENARIO_INFEASIBLE cells.
+
+If in CARLA the arc is physically slower than the geometric estimate (lead is ≤ 5.0 m from target but lateral < 1.5 m at that moment), the backstop silently does **not** fire and the lead continues steering until `_ever_cleared` latches; only then does the backstop re-evaluate. Increase `CUTOUT_TRIGGER_TTC` or `CUTOUT_HEADING_DEG` if the lead is still too close to the target when it finally clears.
+
+#### What to watch in CARLA — low-speed cases (20–30 km/h)
+
+```
+[CUTOUT] Lane cleared: lat=1.5xm >= 1.50m  phase=1    ← latch fires in STEER
+[SAFETY] Lane cleared; lead dist=3.xxm < 5.0m backstop — brake (lead is out of ego lane)
+```
+
+**Good:** `[CUTOUT] Lane cleared` at phase=1 (STEER) or phase=2 (STRAIGHTEN), then `[SAFETY]` with a `lead dist` value confirming the lead is laterally offset when it brakes.
+
+**Bad (old behaviour — must not appear):** any line containing `Lead not cleared (lat=0.xx`.
+
+If `[CUTOUT] Lane cleared` appears at phase=3 (SETTLED), the arc was too slow — increase `CUTOUT_HEADING_DEG` or `CUTOUT_STEER_MAX`.
+
+#### Modified files (this revision only)
+
+| File | Change |
+|---|---|
+| `config/scenario_cutout.py` | Add `CUTOUT_CLEAR_MARGIN_M = 0.0` |
+| `core/scenario_cutout.py` | Add `_ever_cleared` latch; gate backstop and cap on `_ever_cleared`; log `[CUTOUT] Lane cleared` |
+| `TECHNICAL_DOC.md` | Correct B4 description; add this revision entry |
+
+**Untouched:** all other files from previous revisions; CSV schema; matrix dimensions; controller logic; CCRS; metrics.
+
+*Last updated: 2026-07-26.*
