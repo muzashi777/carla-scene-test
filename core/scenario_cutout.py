@@ -69,6 +69,12 @@ class CutOutScenario:
         self._rx = self._ry = 0.0  # right-vector components at trigger (world frame)
         self._tx = self._ty = 0.0  # trigger position (world frame)
 
+        self._backstop_fired = False  # True once no-hit safety backstop engages
+
+    @property
+    def phase(self):
+        return self._phase
+
     # ──────────────────────────────────────────────────────────────────────────
     # Public interface
     # ──────────────────────────────────────────────────────────────────────────
@@ -96,6 +102,23 @@ class CutOutScenario:
         hold(self.target)   # stationary target: held kinematically every tick
         just_triggered = False
         v = speed_ms(self.lead)
+
+        # ── Safety backstop: lead must never hit the target (B4) ─────────────
+        # If the lead has not yet cleared the ego lane when it gets dangerously
+        # close to the target, brake to a stop rather than collide.
+        if not self._backstop_fired and self._phase in (_STEER, _STRAIGHTEN):
+            _bs = getattr(self.cfg, "CUTOUT_SAFETY_BACKSTOP_M", 5.0)
+            if (self._lateral_offset() < self.cfg.CUTOUT_LANE_WIDTH and
+                    dist2d(self.lead, self.target) < _bs):
+                self._backstop_fired = True
+                print(f"[SAFETY] Lead not cleared "
+                      f"(lat={self._lateral_offset():.2f}m < {self.cfg.CUTOUT_LANE_WIDTH}m) "
+                      f"at dist={dist2d(self.lead, self.target):.2f}m < {_bs}m — "
+                      f"emergency brake; lead stops short of target")
+        if self._backstop_fired:
+            self.lead.apply_control(
+                carla.VehicleControl(brake=1.0, hand_brake=True, throttle=0.0))
+            return just_triggered
 
         # ── Hard-stop cap (any post-trigger phase) ────────────────────────────
         # If CUTOUT_STOP_MAX_M is set in config, lock the lead once its 2-D
@@ -127,18 +150,19 @@ class CutOutScenario:
                 self._ctrl_cruise(v)
 
         # ── STEER phase ───────────────────────────────────────────────────────
+        # Speed held via full P-controller (throttle + small brake on overspeed)
+        # so the lead does not decelerate mid-turn and get rear-ended by the ego.
         if self._phase == _STEER:
             if self._lateral_offset() >= self.cfg.CUTOUT_LANE_WIDTH:
                 self._phase = _STRAIGHTEN
                 # Fall through to _STRAIGHTEN below
             else:
-                self.lead.apply_control(carla.VehicleControl(
-                    throttle=self._throttle(v),
-                    steer=self._heading_steer(
-                        self._trigger_yaw + self.cfg.CUTOUT_HEADING_DEG),
-                    brake=0.0))
+                steer = self._heading_steer(
+                    self._trigger_yaw + self.cfg.CUTOUT_HEADING_DEG)
+                self._ctrl_speed_steer(v, steer)
 
         # ── STRAIGHTEN phase ──────────────────────────────────────────────────
+        # Speed held via full P-controller through the return arc.
         if self._phase == _STRAIGHTEN:
             herr = abs(_norm_angle(
                 self._trigger_yaw - self.lead.get_transform().rotation.yaw))
@@ -146,10 +170,8 @@ class CutOutScenario:
                 self._phase = _SETTLED
                 # Fall through to _SETTLED below
             else:
-                self.lead.apply_control(carla.VehicleControl(
-                    throttle=self._throttle(v),
-                    steer=self._heading_steer(self._trigger_yaw),
-                    brake=0.0))
+                steer = self._heading_steer(self._trigger_yaw)
+                self._ctrl_speed_steer(v, steer)
 
         # ── SETTLED phase ─────────────────────────────────────────────────────
         if self._phase == _SETTLED:
@@ -177,13 +199,29 @@ class CutOutScenario:
         raw = self.cfg.CUTOUT_STEER_K * err
         return max(-self.cfg.CUTOUT_STEER_MAX, min(self.cfg.CUTOUT_STEER_MAX, raw))
 
+    def _ctrl_speed_steer(self, v_ms, steer):
+        """Full longitudinal P-controller with lateral steer — maintains speed through turns.
+        Applies active braking on overspeed (unlike _throttle which only idles on overspeed),
+        preventing speed drop from tire drag during the cut-out arc from turning into rear-end risk.
+        """
+        err = self.ego_ms - v_ms
+        if err > 0.0:
+            t = min(self.cfg.LEAD_SPEED_MAX_THROTTLE, self.cfg.LEAD_SPEED_K * err)
+            self.lead.apply_control(
+                carla.VehicleControl(throttle=t, steer=steer, brake=0.0))
+        else:
+            b = min(0.3, self.cfg.LEAD_SPEED_K * (-err))
+            self.lead.apply_control(
+                carla.VehicleControl(throttle=0.0, steer=steer, brake=b))
+
     def _throttle(self, v_ms):
-        """P throttle to maintain ego speed; engine-brake only on overshoot (no active brake)."""
+        """P throttle to maintain ego speed; engine-brake only on overshoot (no active brake).
+        Kept for reference; STEER/STRAIGHTEN now use _ctrl_speed_steer instead."""
         err = self.ego_ms - v_ms
         if err > 0.0:
             return min(self.cfg.LEAD_SPEED_MAX_THROTTLE,
                        self.cfg.LEAD_SPEED_K * err)
-        return 0.0   # engine-drag handles slight overspeed during manoeuvre
+        return 0.0
 
     def _ctrl_cruise(self, v_ms):
         """Longitudinal P-controller, straight ahead."""

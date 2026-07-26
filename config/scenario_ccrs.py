@@ -103,19 +103,18 @@ SINGLE_CONTROLLER  = "proposed_enhanced"
 SINGLE_DELAY_FRAMES = 0
 SHOW_WINDOW = True
 
-# ── Initial approach distance (centre-to-centre, ego → target) ──────────────
-# The target is spawned at EGO_SPAWN + approach_d × forward_vector per case.
-# This controls available reaction time (TTC at spawn = (approach_d - GAP_OFFSET) / ego_ms).
-# Matches Euro-NCAP CCRs spirit: varying approach distance = varying available reaction time.
+# ── Approach distances (fixed-target / ego-sweep design) ─────────────────────
+# The TARGET is FIXED at min(approach_d) = 30 m ahead of the original EGO_SPAWN.
+# For each approach_d, the EGO is swept BACKWARD so the ego-to-target distance = approach_d:
+#   target_pos = EGO_SPAWN + 30 × forward_vector          (same for all cases)
+#   ego_pos    = EGO_SPAWN − (approach_d − 30) × forward_vector  (per-case)
+# Ego sweep is in the backward direction (away from scene obstacles), so all 5 positions
+# are on clear road.  Verify via [SPAWN] EGO log output when running in CARLA.
 #
-# *** approach_d=60 m BLOCKED ***
-# World coords at 60 m: (-43.636, -32.741) — a baked static vehicle in the train000
-# 3DGS collision mesh sits at this position.  The runner's ground-projection spawn
-# will fail loudly with "TARGET spawn failed" for all 10 cells at 60 m.
-# ACTION: run tools/probe_spawn_points.py, then replace 60.0 below with whichever of
-# 58.0 or 62.0 the probe confirms is on clear road.  Do not change this value without
-# visual verification — the coordinate must be confirmed in CARLA first.
-APPROACH_DISTANCES = [30.0, 40.0, 50.0, 62.0, 70.0]   # m — 60.0 → replace after probe
+# Note: 62.0 m replaces the formerly problematic 60.0 m (baked obstacle in mesh).
+# With the fixed-target design the obstacle at 60 m no longer affects target placement,
+# but 62.0 m is retained as the approach distance (ego sweeps 32 m backward).
+APPROACH_DISTANCES = [30.0, 40.0, 50.0, 62.0, 70.0]   # m
 
 
 # ══════════════════════════════════════════════════════════════════

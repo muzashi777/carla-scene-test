@@ -100,16 +100,27 @@ def run_case(sess, cfg, case, controller_name, delay_frames, detector,
     rec.approach_d     = case.get("approach_d", 0.0)
 
     try:
-        # ── EGO ──
-        ego = actors.spawn_vehicle(world, **cfg.EGO_SPAWN)
+        # ── EGO — swept backward for larger approach_d (fixed-target design) ──
+        # Per-case ego position is pre-computed by build_cases() so that the distance
+        # from ego to the FIXED target equals approach_d for every case.
+        # All 5 ego positions are in the backward direction from the original spawn
+        # (away from scene obstacles); verify with [SPAWN] EGO log output.
+        ego_spawn = dict(cfg.EGO_SPAWN)
+        if "ego_x" in case:
+            ego_spawn["x"] = case["ego_x"]
+            ego_spawn["y"] = case["ego_y"]
+        ego = actors.spawn_vehicle(world, **ego_spawn)
         if not ego:
-            print(f"[SPAWN] EGO blocked at ({cfg.EGO_SPAWN['x']:.3f},{cfg.EGO_SPAWN['y']:.3f},{cfg.EGO_SPAWN['z']:.3f})")
+            print(f"[SPAWN] EGO blocked at ({ego_spawn['x']:.3f},{ego_spawn['y']:.3f},{ego_spawn['z']:.3f}) "
+                  f"approach_d={case.get('approach_d','?')}m — clear road expected; report to user")
             rec.result_txt = "EGO spawn failed"; return rec, None
         actor_list.append(ego)
         ego.apply_control(carla.VehicleControl(brake=1.0, hand_brake=True))
         actors.set_friction(ego, case["mu"])
+        print(f"[SPAWN] EGO approach_d={case.get('approach_d','?')}m "
+              f"→ ({ego_spawn['x']:.2f},{ego_spawn['y']:.2f})")
 
-        # ── TARGET (stationary) — position from case if approach_d axis provided ──
+        # ── TARGET (stationary) — fixed position (same for all cases in matrix) ──
         target_spawn = dict(cfg.TARGET_SPAWN)
         if "target_x" in case:
             target_spawn["x"] = case["target_x"]

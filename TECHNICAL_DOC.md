@@ -1882,3 +1882,116 @@ python3 tools/check_conflict.py
 ```
 
 *Last updated: 2026-07-26.*
+
+---
+
+### CCRS Fixed-Target/Ego-Sweep + Cut-out TTC Trigger + Safety — July 2026
+
+#### Part A — CCRS: Fixed target, ego swept backward
+
+**Problem:** The original CCRS design spawned the target at `EGO_SPAWN + approach_d × fwd` per case. This swept the target forward, putting it into the baked 3DGS mesh obstacle at approach_d ≈ 60 m (→ worked around by using 62 m). It also meant a different target position needed validating per case.
+
+**Fix:** Anchor the target at the smallest approach distance (30 m) from the original ego spawn, and for larger approach_d values sweep the **ego backward** instead:
+
+```
+target_pos = EGO_SPAWN + min(approach_d) × fwd   (FIXED: −18.608, −16.201)
+ego_pos    = EGO_SPAWN − (approach_d − 30) × fwd  (per-case, backward direction)
+```
+
+| `approach_d` | ego position | backward offset |
+|---|---|---|
+| 30 m | (6.42, 0.34) — original | 0 m |
+| 40 m | (14.76, 5.85) | 10 m |
+| 50 m | (23.11, 11.37) | 20 m |
+| 62 m | (33.12, 17.98) | 32 m |
+| 70 m | (39.79, 22.39) | 40 m |
+
+All 5 ego positions are in the **backward** direction (positive x/y in train000) — away from all scene obstacles. Verify via `[SPAWN] EGO approach_d=...` log during CARLA runs; any blocked position must be reported.
+
+**Spectator note:** the original spectator TF (5.27, −0.18) is fixed near the original ego spawn and would not frame the ego at approach_d = 70 m (ego ~40 m behind). The matrix runner now moves the spectator per-case, maintaining a fixed offset relative to each ego spawn so the camera always follows the ego.
+
+#### Part B — Cut-out: TTC trigger, headway floor, speed hold, no-hit safety
+
+**B1 — Headway floor (`MIN_HEADWAY_M = 5.0 m`):**  
+`headway_d = max(FIXED_HEADWAY_THW × ego_ms, MIN_HEADWAY_M)`.  
+At 20 km/h: nominal THW headway = 4.44 m < 5.0 m → clamped. In time: 5.0/5.556 = 0.9 s < 1.0 s (minimum reveal_ttc) → occlusion geometry stays valid. All speeds: `MIN_HEADWAY_M/ego_ms < 1.0 s` ✓.
+
+**B2 — TTC-based trigger (`CUTOUT_TRIGGER_TTC = 1.5 s`):**  
+`trigger_d = max(CUTOUT_TRIGGER_TTC × ego_ms, reveal_ttc × ego_ms + GAP_OFFSET − headway_d)`.  
+The lead always has ≥ 1.5 s to clear the ego lane. When the TTC floor clips (11/25 cells), the actual reveal_ttc is larger than the matrix value (scenario is easier, not infeasible). No cells are `SCENARIO_INFEASIBLE` with these parameters.
+
+**Per-speed arc clearance (offline, `tools/check_cutout_spawn.py`):**  
+All 25 cells pass `arc_ok=YES` (trigger_d ≥ arc_fwd_est ≈ 5.2 m). The previously-infeasible cell (20 km/h, reveal_ttc = 1.0) is now feasible (trigger_d = 8.33 m, trig_surf_gap = 3.83 m > 1.0 m).
+
+**TTC_FLOOR_CLIPS cells** (actual_reveal_ttc > matrix value — lead gets more time, scenario is easier):
+
+| speed | matrix ttc | actual reveal_ttc |
+|---|---|---|
+| 20 km/h | 1.0 s | 1.59 s |
+| 20 km/h | 1.5 s | 1.59 s |
+| 30 km/h | 1.0 s | 1.76 s |
+| 30 km/h | 1.5 s | 1.76 s |
+| 40 km/h | 1.0 s | 1.90 s |
+| 40 km/h | 1.5 s | 1.90 s |
+| 50 km/h | 1.0 s | 1.98 s |
+| 50 km/h | 1.5 s | 1.98 s |
+| 60 km/h | 1.0 s | 2.03 s |
+| 60 km/h | 1.5 s | 2.03 s |
+| 60 km/h | 2.0 s | 2.03 s |
+
+**B3 — Speed held through turn:**  
+STEER and STRAIGHTEN phases now use `_ctrl_speed_steer()` — the same P-controller as CRUISE (`_ctrl_cruise`) but with the steer command. It applies active braking on overspeed, maintaining the lead's speed through the arc and preventing the ego from rear-ending a decelerating lead.
+
+**B4 — No-hit safety backstop (`CUTOUT_SAFETY_BACKSTOP_M = 5.0 m`):**  
+If the lead has not reached `CUTOUT_LANE_WIDTH` lateral offset when `dist(lead, target) < CUTOUT_SAFETY_BACKSTOP_M`, an emergency full brake is applied. The run is flagged in the log with `[SAFETY]`. Any case where this fires indicates tuning is needed.
+
+**Ego-perceives-lead (decided):**  
+While the target is occluded by the lead, the ego's AEB perceives the **lead** as the in-path obstacle (car-following with lead's actual gap/speed). When the lead cuts out and the occlusion gate opens, the ego re-targets the stationary target. Controller thresholds are unchanged; only the perceived obstacle switches.
+
+#### Tuning Guide — new knobs
+
+| Symptom | First knob | Direction | Notes |
+|---|---|---|---|
+| Lead still hits/grazes target | `CUTOUT_TRIGGER_TTC` ↑ | Increase | More time for arc; actual_reveal_ttc increases proportionally |
+| Lead cuts out too early (reveal too far) | `CUTOUT_TRIGGER_TTC` ↓ | Decrease | Less lead time; watch for arc-incomplete at high speed |
+| Arc too wide/narrow | `CUTOUT_HEADING_DEG` | Adjust | Wider heading = faster lateral displacement |
+| Arc too slow to start | `CUTOUT_STEER_MAX` ↑ | Increase | Max steer command; watch oscillation |
+| Arc oscillates | `CUTOUT_STEER_K` ↓ | Decrease | Lower P-gain on heading error |
+| Ego too close to lead at low speed | `MIN_HEADWAY_M` ↑ | Increase | Keep below ego_ms × min(reveal_ttc) in time |
+| Speed droop mid-turn | `LEAD_SPEED_K` ↑ | Increase | Higher P-gain on longitudinal control |
+| Safety backstop fires unexpectedly | `CUTOUT_SAFETY_BACKSTOP_M` ↓ | Decrease | Only if sure arc completes; increase if lead too close |
+
+**Final numeric values are set in CARLA** — these are starting points only.
+
+#### Modified files
+
+| File | Change |
+|---|---|
+| `config/scenario_ccrs.py` | Fixed-target design comment; approach_d comment updated |
+| `config/scenario_cutout.py` | Add `MIN_HEADWAY_M`, `CUTOUT_TRIGGER_TTC`, `CUTOUT_SAFETY_BACKSTOP_M`; update headway/trigger/matrix comments |
+| `run_matrix_ccrs.py` | `build_cases()`: fixed target + per-case ego sweep; per-case spectator update |
+| `run_matrix_cutout.py` | `build_cases()`: headway floor + TTC-based trigger formula |
+| `core/runner_ccrs.py` | Spawn ego at `case["ego_x"/"ego_y"]`; log ego spawn position per case |
+| `core/runner_cutout.py` | Headway floor + TTC trigger in fallback formula; ego-perceives-lead logic; fix latent `headway_thw` NameError |
+| `core/scenario_cutout.py` | `_ctrl_speed_steer()` (B3 speed hold); safety backstop (B4); `phase` property |
+| `tools/check_cutout_spawn.py` | Extended with TTC floor analysis, arc clearance check, actual_reveal_ttc column |
+
+**Untouched:** `runner.py`, `runner_lead_brake.py`, `scenario_ccrs.py` logic, all scene03_2 spawns, `conflict.py`, `metrics.py`, CSV schema, matrix dimensions (5×5×2=50), controller logic, occlusion gate, viz colours, `CUTOUT_STOP_MAX_M`.
+
+#### Verification (no CARLA)
+
+```bash
+python3 -m py_compile \
+    config/scenario_ccrs.py config/scenario_cutout.py \
+    run_matrix_ccrs.py run_matrix_cutout.py \
+    core/scenario_cutout.py core/runner_ccrs.py core/runner_cutout.py \
+    tools/check_cutout_spawn.py
+
+python3 tools/check_cutout_spawn.py
+# Expected: 0 TIGHT/INFEASIBLE, 0 TRIGGER_NEGATIVE, 11 TTC_FLOOR_CLIPS (see table above)
+
+python3 tools/check_conflict.py
+# Expected: cut-in 50/50, lead-brake 50/50, CCRs 50/50, cut-out 50/50 = 200/200 conflict
+```
+
+*Last updated: 2026-07-26.*

@@ -22,19 +22,41 @@ from perception.yolo_detector import YoloDetector
 
 
 def build_cases():
-    """5 speeds × 5 approach_d × 2 μ = 50 cases/controller."""
+    """5 speeds × 5 approach_d × 2 μ = 50 cases/controller.
+
+    Fixed-target / ego-sweep design:
+      target_pos = EGO_SPAWN + min(approach_d) × forward_vector   (FIXED for all cases)
+      ego_pos    = EGO_SPAWN − (approach_d − min_d) × forward_vector  (swept backward)
+
+    The target occupies a single validated spot (min_d ahead of the original ego spawn).
+    Larger approach_d values move the ego further back; the target never moves.
+    The ego's heading and scenario logic are unchanged.
+
+    Ego positions (all 5) are in the BACKWARD direction from the original spawn (away from
+    scene obstacles). They are on clear road by geometry; verify with try_spawn_actor output.
+    """
     yaw_rad = math.radians(cfg.EGO_SPAWN["yaw"])
-    fwd_x = math.cos(yaw_rad)
-    fwd_y = math.sin(yaw_rad)
+    fwd_x   = math.cos(yaw_rad)
+    fwd_y   = math.sin(yaw_rad)
+    min_d   = min(cfg.MATRIX["approach_d"])
+
+    # Target: fixed at min_d ahead of original ego spawn
+    target_x = cfg.EGO_SPAWN["x"] + min_d * fwd_x
+    target_y = cfg.EGO_SPAWN["y"] + min_d * fwd_y
+
     cases = []
     for v, d, m in itertools.product(
             cfg.MATRIX["ego_speed_kmh"], cfg.MATRIX["approach_d"], cfg.MATRIX["mu"]):
-        target_x = cfg.EGO_SPAWN["x"] + d * fwd_x
-        target_y = cfg.EGO_SPAWN["y"] + d * fwd_y
+        # Ego swept backward so distance from ego to (fixed) target equals d
+        offset = d - min_d
+        ego_x  = cfg.EGO_SPAWN["x"] - offset * fwd_x
+        ego_y  = cfg.EGO_SPAWN["y"] - offset * fwd_y
         cases.append({
             "ego_speed_kmh": v,
             "approach_d":    d,
             "mu":            m,
+            "ego_x":         round(ego_x, 3),
+            "ego_y":         round(ego_y, 3),
             "target_x":      round(target_x, 3),
             "target_y":      round(target_y, 3),
         })
@@ -56,6 +78,11 @@ def main():
           f"= {len(cases)*len(matrix_runs)} runs  TEST_MODE={test_mode}"
           f"  MATRIX_VIZ={'on' if viz_enabled else 'off'}")
 
+    # Spectator offset from original EGO_SPAWN (cosmetic; tracks per-case ego position).
+    # Original: SPECTATOR_TF ≈ EGO_SPAWN + (-1.15, -0.52) — slightly behind ego looking fwd.
+    _spec_dx = cfg.SPECTATOR_TF["x"] - cfg.EGO_SPAWN["x"]   # ≈ -1.15 m
+    _spec_dy = cfg.SPECTATOR_TF["y"] - cfg.EGO_SPAWN["y"]   # ≈ -0.52 m
+
     records = []
     with CarlaSession(cfg.HOST, cfg.PORT, cfg.TIMEOUT, cfg.FIXED_DT) as sess:
         actors.check_scene(sess.world, cfg.EXPECTED_SCENE)
@@ -64,6 +91,14 @@ def main():
         for run in matrix_runs:
             for i, case in enumerate(cases):
                 print(f"\n--- [{run['label']}] case {i+1}/{len(cases)} {case} ---")
+                # Move spectator to follow the per-case ego spawn (ego sweeps backward).
+                # Ego can be up to ~40 m behind original spawn at approach_d=70 m —
+                # the original fixed spectator would not frame the action at large distances.
+                if "ego_x" in case:
+                    _spec_tf = dict(cfg.SPECTATOR_TF,
+                                    x=case["ego_x"] + _spec_dx,
+                                    y=case["ego_y"] + _spec_dy)
+                    actors.set_spectator(sess.world, _spec_tf)
                 rec, _ = run_case(sess, cfg, case, run["controller"],
                                   run.get("delay_frames", 0), detector,
                                   run_spec=run, case_idx=i, test_mode=test_mode, viz=viz)

@@ -63,8 +63,13 @@ LEAD_SPAWN = dict(z=0.79, yaw=-146.54, model="vehicle.ue4.audi.tt")
 # The lead is driven entirely under CARLA's vehicle physics (VehicleControl).
 # No set_transform / set_target_velocity is used during the manoeuvre.
 #
-# Trigger:
-CUTOUT_TRIGGER_D     = 12.0  # m — start lane-change when lead is this close to target [TO BE TUNED]
+# Trigger (TTC-based):
+# The lane-change fires when TTC(lead→target) ≤ CUTOUT_TRIGGER_TTC, giving the
+# lead a consistent time budget to clear regardless of speed.
+# Per-case trigger_d = max(CUTOUT_TRIGGER_TTC × ego_ms, reveal_ttc-based formula).
+# When the floor clips, actual_reveal_ttc > matrix value — noted in feasibility table.
+CUTOUT_TRIGGER_TTC   = 1.5   # s — min lead TTC to target at trigger [TO BE TUNED in CARLA]
+CUTOUT_TRIGGER_D     = 12.0  # m — legacy single-case fallback (overridden by matrix formula)
 #
 # Lateral target (when to stop steering right and begin straightening):
 CUTOUT_LANE_WIDTH    = 1.5   # m — lateral displacement (in lead's right-frame) that marks
@@ -94,18 +99,18 @@ LEAD_SPEED_K            = 0.5   # throttle/brake per m/s speed error (P-gain) [T
                                  # Too high → oscillates throttle/brake.
 LEAD_SPEED_MAX_THROTTLE = 0.6   # max throttle command (0–1) [TO BE TUNED]
 
-# ── Lead headway: fixed THW (not swept) ──────────────────────────────────────
+# ── Lead headway: fixed THW + absolute floor (not swept) ─────────────────────
 # The ego↔lead following distance is a single constant, NOT a matrix axis.
-# headway_d = FIXED_HEADWAY_THW × ego_ms is computed per-case in the runner/matrix.
+# headway_d = max(FIXED_HEADWAY_THW × ego_ms, MIN_HEADWAY_M) per case.
+# MIN_HEADWAY_M prevents unrealistically small gaps at low speed.
 # Difficulty is controlled instead by REVEAL_TTC (see matrix section below).
 #
-# Set to 0.8 s so that at the hardest case (reveal_ttc=1.0) the lead-to-target
-# surface gap at trigger = (1.0 - 0.8) × ego_ms ≥ 1.1 m (at 20 km/h), giving the
-# lead enough room to begin the lane change without overlapping the target.
-# If CARLA tuning shows the lead still cannot complete the manoeuvre at reveal_ttc=1.0
-# and 20 km/h, increase GAP_OFFSET slightly (e.g. 5.0 m) — do NOT change the matrix
-# values; GAP_OFFSET is the per-case geometry constant that shifts the trigger distance.
+# MIN_HEADWAY_M in time must remain BELOW the minimum reveal_ttc so the lead
+# stays between ego and target at trigger (occlusion geometry valid):
+#   At 20 km/h: MIN_HEADWAY_M/ego_ms = 5.0/5.556 = 0.9 s < 1.0 s (min reveal_ttc) ✓
 FIXED_HEADWAY_THW = 0.8   # s — fixed following distance [TO BE TUNED in CARLA]
+MIN_HEADWAY_M     = 5.0   # m — absolute headway floor; clamps low-speed THW-derived gap
+                           # [TO BE TUNED in CARLA]
 
 # ── Spawn geometry safety margins ────────────────────────────────────────────
 # SPAWN_CLEARANCE_M: minimum surface gap enforced between ego and lead at spawn.
@@ -124,6 +129,13 @@ MIN_TRIGGER_SURF_GAP_M = 1.0  # m
 # CUTOUT_STOP_MAX_M: hard-stop the lead this many metres past the trigger point
 # to prevent it entering the baked obstacle zone at ~60 m on train000.
 CUTOUT_STOP_MAX_M = 18.0    # m from trigger point; None = unlimited
+
+# CUTOUT_SAFETY_BACKSTOP_M: if the lead is still in the ego lane (lateral_offset <
+# CUTOUT_LANE_WIDTH) when its center-to-center distance to the target falls below
+# this value, apply an emergency full brake to stop short of the target.
+# This is a guaranteed backstop against the lead ramming the target. Any case where
+# it fires is flagged in the runner log. [TO BE TUNED in CARLA]
+CUTOUT_SAFETY_BACKSTOP_M = 5.0  # m — center-to-center threshold (≈ 0.5 m surface gap)
 
 # ── Target reveal-TTC: primary matrix variable ────────────────────────────────
 # reveal_ttc = surface gap / ego_ms at the instant the lead cut-out triggers.
@@ -215,10 +227,14 @@ SHOW_WINDOW = True
 #  TEST MATRIX for run_matrix_cutout.py
 #  5 ego_speed × 5 reveal_ttc × 2 μ = 50 cases/controller
 #
-#  Primary axis: reveal_ttc (TTC at cut-out trigger, same for all speeds).
-#  headway_d = FIXED_HEADWAY_THW × ego_ms (not swept; derived per case in runner).
-#  cutout_trigger_d = (reveal_ttc - FIXED_HEADWAY_THW) × ego_ms + GAP_OFFSET (derived per case).
-#  Min cutout_trigger_d: reveal_ttc=1.0, 20 km/h → ≈ 5.6 m (all 50 cases > 0 ✓).
+#  Primary axis: reveal_ttc (intended ego-to-target TTC at trigger).
+#  headway_d = max(FIXED_HEADWAY_THW × ego_ms, MIN_HEADWAY_M)  (not swept; derived per case).
+#  cutout_trigger_d = max(CUTOUT_TRIGGER_TTC × ego_ms,
+#                         reveal_ttc × ego_ms + GAP_OFFSET − headway_d)
+#  The TTC floor (CUTOUT_TRIGGER_TTC) ensures the lead always has enough time to
+#  complete the arc. Cells where the floor clips have actual_reveal_ttc > matrix value
+#  (scenario is easier than intended but safe). See tools/check_cutout_spawn.py for the
+#  per-cell feasibility table. No cells are SCENARIO_INFEASIBLE with these parameters.
 # ══════════════════════════════════════════════════════════════════
 MATRIX = dict(
     ego_speed_kmh = [20.0, 30.0, 40.0, 50.0, 60.0],

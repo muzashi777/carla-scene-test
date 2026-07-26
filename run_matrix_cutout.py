@@ -22,21 +22,37 @@ from perception.yolo_detector import YoloDetector
 
 
 def build_cases():
-    """5 speeds × 5 reveal_ttc × 2 μ = 50 cases/controller."""
-    fixed_thw = getattr(cfg, "FIXED_HEADWAY_THW", 1.5)
-    gap_offset = getattr(cfg, "GAP_OFFSET", 4.5)
+    """5 speeds × 5 reveal_ttc × 2 μ = 50 cases/controller.
+
+    Headway: max(FIXED_HEADWAY_THW × ego_ms, MIN_HEADWAY_M) — prevents unrealistically
+    small gaps at low speed while keeping headway-in-time below min(reveal_ttc).
+
+    Trigger distance (TTC-based floor):
+      trigger_d = max(CUTOUT_TRIGGER_TTC × ego_ms,
+                      reveal_ttc × ego_ms + GAP_OFFSET − headway_d)
+    The floor gives the lead a minimum time budget (CUTOUT_TRIGGER_TTC s) to complete
+    the arc. When the floor clips, actual_reveal_ttc > matrix value (easier, not infeasible).
+    """
+    fixed_thw    = getattr(cfg, "FIXED_HEADWAY_THW", 0.8)
+    min_hw_m     = getattr(cfg, "MIN_HEADWAY_M", 5.0)
+    trigger_ttc  = getattr(cfg, "CUTOUT_TRIGGER_TTC", 1.5)
+    gap_offset   = getattr(cfg, "GAP_OFFSET", 4.5)
     cases = []
     for v, ttc, m in itertools.product(
             cfg.MATRIX["ego_speed_kmh"], cfg.MATRIX["reveal_ttc"], cfg.MATRIX["mu"]):
-        ego_ms = v / 3.6
-        headway_d = fixed_thw * ego_ms
-        cutout_trigger_d = (ttc - fixed_thw) * ego_ms + gap_offset
+        ego_ms    = v / 3.6
+        headway_d = max(fixed_thw * ego_ms, min_hw_m)
+        # formula_d ensures ego-to-target surface gap at trigger = reveal_ttc × ego_ms
+        formula_d = ttc * ego_ms + gap_offset - headway_d
+        # TTC floor: lead always has at least trigger_ttc seconds to clear
+        floor_d   = trigger_ttc * ego_ms
+        cutout_trigger_d = max(formula_d, floor_d)
         cases.append({
             "ego_speed_kmh":    v,
             "reveal_ttc":       ttc,
             "mu":               m,
-            "headway_d":        headway_d,
-            "cutout_trigger_d": cutout_trigger_d,
+            "headway_d":        round(headway_d, 3),
+            "cutout_trigger_d": round(cutout_trigger_d, 3),
         })
     return cases
 

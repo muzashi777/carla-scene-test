@@ -92,18 +92,26 @@ def run_case(sess, cfg, case, controller_name, delay_frames, detector,
     spec = run_spec or {}
     _seed = (sum(ord(c) for c in spec.get("label", controller_name)) * 10000 + case_idx) % (2**32)
 
-    # ── Lead headway: fixed THW (not swept) ──
-    ego_ms = case["ego_speed_kmh"] / 3.6
-    headway_d = case.get("headway_d", getattr(cfg, "FIXED_HEADWAY_THW", 1.5) * ego_ms)
-    reveal_ttc = case.get("reveal_ttc", 2.0)
+    # ── Lead headway: max(FIXED_HEADWAY_THW × ego_ms, MIN_HEADWAY_M) ──
+    ego_ms       = case["ego_speed_kmh"] / 3.6
+    fixed_thw    = getattr(cfg, "FIXED_HEADWAY_THW", 0.8)
+    min_hw_m     = getattr(cfg, "MIN_HEADWAY_M", 5.0)
+    reveal_ttc   = case.get("reveal_ttc", 2.0)
+    trigger_ttc  = getattr(cfg, "CUTOUT_TRIGGER_TTC", 1.5)
 
-    # cut-out trigger distance derived from reveal_ttc if not pre-computed by the matrix script
-    # Formula: ego→target_at_trigger = headway_d + trigger_d  (both cruise at ego_ms)
-    #   → trigger_d = reveal_ttc × ego_ms + GAP_OFFSET - headway_d
-    # GAP_OFFSET here is the config approximation (same as the conflict check).
+    headway_d = case.get(
+        "headway_d",
+        max(fixed_thw * ego_ms, min_hw_m),
+    )
+
+    # TTC-based trigger distance floor: lead gets at least CUTOUT_TRIGGER_TTC s to clear.
+    # Formula branch: ego-to-target surface gap at trigger = reveal_ttc × ego_ms.
+    # Floor branch:   lead TTC to target = CUTOUT_TRIGGER_TTC s (speed-scaled trigger).
+    _formula_d = reveal_ttc * ego_ms + cfg.GAP_OFFSET - headway_d
+    _floor_d   = trigger_ttc * ego_ms
     cutout_trigger_d = case.get(
         "cutout_trigger_d",
-        reveal_ttc * ego_ms + cfg.GAP_OFFSET - headway_d,
+        max(_formula_d, _floor_d),
     )
 
     is_conflict = cutout_is_conflict(case, cfg)
@@ -138,14 +146,16 @@ def run_case(sess, cfg, case, controller_name, delay_frames, detector,
         # overlap the ego at spawn (CARLA's try_spawn_actor rejects overlapping actors).
         # Proxy: treat lead half-length ≈ ego half-length (both vehicle.ue4.audi.tt class).
         _ego_half    = ego.bounding_box.extent.x
-        _min_headway = 2.0 * _ego_half + getattr(cfg, "SPAWN_CLEARANCE_M", 0.5)
+        _min_headway = max(2.0 * _ego_half + getattr(cfg, "SPAWN_CLEARANCE_M", 0.5),
+                           min_hw_m)
         if headway_d < _min_headway:
             print(f"[SPAWN] headway_d={headway_d:.3f}m < min {_min_headway:.3f}m "
-                  f"(2×ego_half={2*_ego_half:.3f}m + clearance); "
-                  f"clamping to {_min_headway:.3f}m")
+                  f"(bbox_min={2*_ego_half + getattr(cfg,'SPAWN_CLEARANCE_M',0.5):.3f}m, "
+                  f"MIN_HEADWAY_M={min_hw_m:.1f}m); clamping to {_min_headway:.3f}m")
             headway_d        = _min_headway
             rec.headway_d    = headway_d
-            cutout_trigger_d = reveal_ttc * ego_ms + cfg.GAP_OFFSET - headway_d
+            _formula_d2      = reveal_ttc * ego_ms + cfg.GAP_OFFSET - headway_d
+            cutout_trigger_d = max(_formula_d2, trigger_ttc * ego_ms)
 
         # Infeasibility guard: if the post-clamp lead-to-target surface gap at trigger is
         # below MIN_TRIGGER_SURF_GAP_M, the lead cannot complete the lane-change before
@@ -258,6 +268,14 @@ def run_case(sess, cfg, case, controller_name, delay_frames, detector,
 
         prev_gap = surface_gap(actors.dist2d(ego, target))
 
+        # ── Ego-perceives-lead: track lead surface gap separately ──
+        # While the target is occluded by the lead, the ego treats the lead as an
+        # in-path obstacle (car-following). Once the lead cuts out and the target is
+        # revealed, the ego re-targets the stationary target.  Controller logic and
+        # thresholds are unchanged; only the perceived obstacle switches.
+        prev_lead_gap = max(0.0, actors.dist2d(ego, lead) - gap_offset)
+        lead_decel_ema_lead = 0.0   # lead cruises at constant speed → decel ≈ 0
+
         brake_engaged = False
         brake_info = None
         stopped = False
@@ -348,15 +366,48 @@ def run_case(sess, cfg, case, controller_name, delay_frames, detector,
             if reveal_tick == tick and reveal_ttc_val < 0:
                 reveal_ttc_val = ttc if not math.isinf(ttc) else -1.0
 
-            # Target is stationary: lead_speed=0, lead_decel=0
-            lead_ms = actors.speed_ms(target)   # ≈ 0
+            # ── Ego-perceives-lead: car-follow the lead while target is occluded ──
+            # While the lead is in the ego lane and the target is still occluded,
+            # the ego perceives the lead as an in-path obstacle.  The controller
+            # receives the lead's gap/rel_speed/ttc and treats it as a moving lead.
+            # When the lead cuts out and the target becomes detectable, the ego
+            # automatically re-targets the stationary target (occlusion gate opens).
+            lead_d   = actors.dist2d(ego, lead)
+            lead_gap = max(0.0, lead_d - gap_offset)
+            lead_rel_speed = max(0.0, (prev_lead_gap - lead_gap) / cfg.FIXED_DT)
+            prev_lead_gap  = lead_gap
+            lead_ttc_ego   = (lead_gap / lead_rel_speed) if lead_rel_speed > 1e-3 else math.inf
+            lead_ms_actual = actors.speed_ms(lead)
 
-            det_buffer.append(detected_now)
+            lead_gt_now, _ll, _llt = actors.inpath_hazard(
+                ego, lead, cfg.INPATH_MAX_RANGE, cfg.INPATH_HALF_WIDTH, 0.0)
+
+            # Use lead as obstacle while: target occluded AND lead in path AND lead not yet settled
+            _lead_settled = (scen.phase >= 3)  # _SETTLED
+            use_lead_as_obs = (not detected_now and lead_gt_now and not _lead_settled)
+
+            if use_lead_as_obs:
+                # Report lead as the perceived obstacle; lead is moving so AEB car-follows
+                obs_gap       = lead_gap
+                obs_rel_speed = lead_rel_speed
+                obs_ttc       = lead_ttc_ego
+                obs_lead_ms   = lead_ms_actual
+                obs_decel     = lead_decel_ema_lead
+            else:
+                # Target is visible (or lead settled); report target as obstacle
+                obs_gap       = gap
+                obs_rel_speed = rel_speed
+                obs_ttc       = ttc
+                obs_lead_ms   = actors.speed_ms(target)   # ≈ 0
+                obs_decel     = lead_decel_ema
+
+            det_buffer.append(detected_now or use_lead_as_obs)
             perceived = det_buffer[0]
 
-            perc = Perception(detected=detected_now, distance=gap,
-                              rel_speed=rel_speed, ttc=ttc, box_h=box_h,
-                              lead_speed=lead_ms, lead_decel=lead_decel_ema)
+            perc = Perception(detected=(detected_now or use_lead_as_obs),
+                              distance=obs_gap, rel_speed=obs_rel_speed,
+                              ttc=obs_ttc, box_h=box_h,
+                              lead_speed=obs_lead_ms, lead_decel=obs_decel)
             ego_state = EgoState(speed_ms=actors.speed_ms(ego), speed_kmh=v_kmh, mu=case["mu"])
             perc, ego_state = degrader.apply(perc, ego_state)
             if predictor is not None:
@@ -370,7 +421,7 @@ def run_case(sess, cfg, case, controller_name, delay_frames, detector,
                     brake_engaged = True
                     brake_info = (tick, gap, v_kmh, ego.get_location().y, ttc)
                     rec.a_req_at_brake = actors.required_decel(
-                        ego_state.speed_ms, lead_ms, lead_decel_ema, gap)
+                        ego_state.speed_ms, obs_lead_ms, obs_decel, obs_gap)
                 if cfg.BRAKE_MODEL == "kinematic":
                     if brake_v_model is None:
                         brake_v_model = actors.speed_ms(ego)
@@ -443,8 +494,7 @@ def run_case(sess, cfg, case, controller_name, delay_frames, detector,
                 rec.time_reveal_to_brake = (brake_info[0] - reveal_tick) * cfg.FIXED_DT
 
         print("=" * 60)
-        hw_txt = (f"THW={headway_thw:.1f}s→{headway_d:.1f}m" if getattr(cfg, "USE_THW", False)
-                  else f"headway={headway_d:.0f}m")
+        hw_txt = f"headway={headway_d:.1f}m(thw={headway_d/ego_ms:.2f}s)"
         print(f"RESULT [{controller_name} delay={delay_frames}f "
               f"v={case['ego_speed_kmh']:.0f} mu={case['mu']} {hw_txt}] : {result_txt}")
         if brake_info:
