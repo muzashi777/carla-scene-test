@@ -68,7 +68,7 @@ LEAD_SPAWN = dict(z=0.79, yaw=-146.54, model="vehicle.ue4.audi.tt")
 # lead a consistent time budget to clear regardless of speed.
 # Per-case trigger_d = max(CUTOUT_TRIGGER_TTC × ego_ms, reveal_ttc-based formula).
 # When the floor clips, actual_reveal_ttc > matrix value — noted in feasibility table.
-CUTOUT_TRIGGER_TTC   = 1.5   # s — min lead TTC to target at trigger [TO BE TUNED in CARLA]
+CUTOUT_TRIGGER_TTC   = 1.9   # s — min lead TTC to target at trigger [TO BE TUNED in CARLA]
 CUTOUT_TRIGGER_D     = 12.0  # m — legacy single-case fallback (overridden by matrix formula)
 #
 # Lateral target (when to stop steering right and begin straightening):
@@ -108,7 +108,7 @@ LEAD_SPEED_MAX_THROTTLE = 0.6   # max throttle command (0–1) [TO BE TUNED]
 # MIN_HEADWAY_M in time must remain BELOW the minimum reveal_ttc so the lead
 # stays between ego and target at trigger (occlusion geometry valid):
 #   At 20 km/h: MIN_HEADWAY_M/ego_ms = 5.0/5.556 = 0.9 s < 1.0 s (min reveal_ttc) ✓
-FIXED_HEADWAY_THW = 0.8   # s — fixed following distance [TO BE TUNED in CARLA]
+FIXED_HEADWAY_THW = 0.7   # s — fixed following distance [TO BE TUNED in CARLA]
 MIN_HEADWAY_M     = 5.0   # m — absolute headway floor; clamps low-speed THW-derived gap
                            # [TO BE TUNED in CARLA]
 
@@ -117,7 +117,7 @@ MIN_HEADWAY_M     = 5.0   # m — absolute headway floor; clamps low-speed THW-d
 #   If headway_d < 2×ego_half_len + SPAWN_CLEARANCE_M, headway_d is clamped up.
 #   At 20 km/h the nominal headway (0.8×5.556=4.444 m) overlaps the bounding boxes
 #   (combined ≈4.5 m); 0.5 m clearance yields a clamped headway of ~5.0 m.
-SPAWN_CLEARANCE_M    = 0.5  # m
+SPAWN_CLEARANCE_M    = 2.5  # m
 
 # MIN_TRIGGER_SURF_GAP_M: minimum surface gap between lead and target at the
 #   cut-out trigger point, required for the physics-based lane-change to succeed.
@@ -143,7 +143,7 @@ CUTOUT_SAFETY_BACKSTOP_M = 5.0  # m — center-to-center threshold (≈ 0.5 m su
 # "Lane cleared" = lateral_offset ≥ CUTOUT_LANE_WIDTH + CUTOUT_CLEAR_MARGIN_M.
 # 0.0 = exact threshold; increase if you want the lead fully out before it can stop.
 # [TO BE TUNED in CARLA — start at 0.0]
-CUTOUT_CLEAR_MARGIN_M    = 0.0  # m
+CUTOUT_CLEAR_MARGIN_M    = 10.0  # m
 
 # ── Target reveal-TTC: primary matrix variable ────────────────────────────────
 # reveal_ttc = surface gap / ego_ms at the instant the lead cut-out triggers.
