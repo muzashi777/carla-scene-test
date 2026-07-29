@@ -2076,3 +2076,106 @@ If `[CUTOUT] Lane cleared` appears at phase=3 (SETTLED), the arc was too slow �
 **Untouched:** all other files from previous revisions; CSV schema; matrix dimensions; controller logic; CCRS; metrics.
 
 *Last updated: 2026-07-26.*
+
+---
+
+---
+
+### Rev 2026-07-29 — Junction Cut-in scenario on train105
+
+Added a fifth test scenario on a new map (`train105`).  All existing scenarios (`cut-in`, `lead-brake`, `CCRs`, `cut-out`) are byte-for-byte unchanged.
+
+#### Scenario description
+
+The ego drives straight in its own lane.  An intruder vehicle waits stationary at a junction entrance on the left side.  When the ego closes to `TURN_TRIGGER_D` (swept as matrix axis `trigger_d`), the intruder turns right into the ego lane using physics-based steering, aligns with the ego heading, then brakes to a full stop — becoming a stationary blocker that forces AEB engagement.
+
+#### New files
+
+| File | Purpose |
+|---|---|
+| `config/scenario_junction_cutin.py` | Junction cut-in config: EGO/INTRUDER_SPAWN/STOP, EXPECTED_SCENE="train105", steering constants, 5×5×2=50 matrix |
+| `core/scenario_junction_cutin.py` | `JunctionCutInScenario`: 3-phase state machine (CRUISE→STEER→SETTLED) with P-heading + P-speed controllers |
+| `core/runner_junction_cutin.py` | `JunctionCutInRecord` + `run_case()` for junction cut-in |
+| `run_single_junction_cutin.py` | Entry point: 1 junction cut-in case with display |
+| `run_matrix_junction_cutin.py` | Entry point: junction cut-in matrix → `results/junction_matrix_*.csv` |
+
+#### Modified files (additive only — no existing code paths changed)
+
+| File | Change |
+|---|---|
+| `core/conflict.py` | Added `junction_cutin_is_conflict()` at end of file |
+| `tools/check_conflict.py` | Added `check_junction_cutin()` section; grand total 200 → 250 |
+| `README.md` | Added scenario row, run commands, matrix table entry, z note, result prefix |
+| `TECHNICAL_DOC.md` | This entry |
+
+#### Conflict formula (train105)
+
+The intruder ends as a stationary blocker at `INTRUDER_STOP`.  Reuses `_kinematic_conflict_stationary_target()` (same helper as CCRs and cut-out):
+
+```
+dist         = hypot(EGO_SPAWN.x − INTRUDER_STOP.x, EGO_SPAWN.y − INTRUDER_STOP.y)
+surface_gap  = dist − GAP_OFFSET
+t_conflict   = surface_gap / v_ego
+is_conflict  = t_conflict ≤ MAX_TICKS × FIXED_DT (20 s)
+```
+
+`trigger_d` does **not** appear in the formula — the intruder always stops at `INTRUDER_STOP` regardless of when it starts turning.  With the placeholder `INTRUDER_STOP` (x=39.56, y=−165.0), all 50 cases are conflict cases (worst: 20 km/h → t ≈ 12.7 s < 20 s).
+
+#### Reuse of cut-out steering (Rev 2026-07-22b)
+
+`core/scenario_junction_cutin.py` adapts the physics-based steering state machine from `core/scenario_cutout.py`:
+
+| Aspect | Cut-out | Junction cut-in |
+|---|---|---|
+| Phases | CRUISE → STEER → STRAIGHTEN → SETTLED | CRUISE → STEER → SETTLED (no STRAIGHTEN) |
+| Trigger condition | `dist(lead, target) ≤ CUTOUT_TRIGGER_D` | `dist(ego, intruder) ≤ TURN_TRIGGER_D` |
+| Steer target | `trigger_yaw + CUTOUT_HEADING_DEG` (≈30°) | `trigger_yaw + TURN_HEADING_DEG` (≈−90°) |
+| Phase transition | lateral_offset ≥ LANE_WIDTH | |heading_error_to_target| < SETTLE_DEG |
+| Post-manoeuvre | cruise or stop (CUTOUT_AFTER_STOP) | always brake to full stop (AFTER_TURN_STOP=True) |
+| Velocity boot | in start() | none (starts from rest; CRUISE holds hand_brake) |
+
+All control is via `apply_control(VehicleControl(...))` in the loop; no `set_target_velocity` / `set_transform` after `start()`.
+
+#### Fixed z for train105
+
+`EGO_SPAWN z=10.17`, `INTRUDER_SPAWN z=11.12` — fixed config values used directly.  Ground on train105 sits at ≈10–11 m absolute z.  Same rationale as train000 (Rev 2026-07-22): `world.cast_ray()` is unreliable on 3DGS collision meshes.
+
+#### Existing-behaviour guarantee
+
+- `core/conflict.py` existing functions: `cutin_is_conflict()`, `lead_brake_is_conflict()`, `ccrs_is_conflict()`, `cutout_is_conflict()` — **unchanged**.
+- All four existing scenario/config/runner files — **byte-for-byte unchanged**.
+- `core/actors.py`, `core/metrics.py`, `core/types.py` — **unchanged**.
+- All controllers in `control/` — **unchanged** (receive the same `Perception`/`EgoState` inputs as before).
+- CSV schema for existing scenarios — **unchanged** (new scenario writes a separate prefix `junction_matrix_`).
+
+#### Values the user must tune in CARLA
+
+| Constant | Location | Notes |
+|---|---|---|
+| `INTRUDER_STOP` | `config/scenario_junction_cutin.py` | Placeholder at (39.56, −165.0, 11.12); set to observed intruder stop position after first live run |
+| `SPECTATOR_TF` | `config/scenario_junction_cutin.py` | `None` until tuned; set to `dict(x=…, y=…, z=…, yaw=…)` |
+| `TURN_TRIGGER_D` | `config/scenario_junction_cutin.py` | Default 30 m; adjust so trigger fires at a useful ego↔intruder distance |
+| `TURN_HEADING_DEG` | `config/scenario_junction_cutin.py` | Default −90°; negate (+90°) if intruder turns the wrong way in CARLA |
+| `JCUTIN_STEER_K`, `JCUTIN_STEER_MAX`, `JCUTIN_SETTLE_DEG` | `config/scenario_junction_cutin.py` | P-heading gains; use cut-out tuning guide as reference (TECHNICAL_DOC.md Rev 2026-07-22b) |
+| `JCUTIN_SPEED_K`, `JCUTIN_MAX_THROTTLE` | `config/scenario_junction_cutin.py` | P-speed gains |
+
+#### How to verify (no CARLA)
+
+```bash
+# Conflict counts — expect junction cut-in 50/50, grand total 250/250
+python tools/check_conflict.py
+
+# Syntax check all new files
+python -m py_compile \
+  config/scenario_junction_cutin.py \
+  core/scenario_junction_cutin.py \
+  core/runner_junction_cutin.py \
+  run_single_junction_cutin.py \
+  run_matrix_junction_cutin.py
+
+# Confirm no teleport on the intruder in the update loop
+grep -n "set_transform\|set_target_velocity" core/scenario_junction_cutin.py
+# → no matches (neither call is present; start() has no velocity boot)
+```
+
+*Last updated: 2026-07-29.*

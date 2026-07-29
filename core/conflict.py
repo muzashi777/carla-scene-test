@@ -268,3 +268,31 @@ def cutin_is_conflict(case: dict, cfg) -> bool:
         max_ticks=cfg.MAX_TICKS,
         fixed_dt=cfg.FIXED_DT,
     )
+
+
+def junction_cutin_is_conflict(case: dict, cfg) -> bool:
+    """
+    Return True if this Junction Cut-in matrix case is a conflict case.
+
+    Conflict is defined against the STATIONARY intruder at INTRUDER_STOP
+    (the point where the intruder brakes to a full stop in the ego lane after
+    completing its right turn).  An unbraked ego at constant speed would collide
+    with that stationary blocker within MAX_TICKS × FIXED_DT seconds.
+
+    This formula is independent of trigger_d (when the turn starts) — the
+    intruder always ends up at INTRUDER_STOP regardless of trigger timing.
+    All 50 matrix cases are expected to be conflicts with the current parameters.
+
+    'case' must contain 'ego_speed_kmh'.
+    Uses cfg.EGO_SPAWN, cfg.INTRUDER_STOP, cfg.GAP_OFFSET, cfg.MAX_TICKS, cfg.FIXED_DT.
+    """
+    return _kinematic_conflict_stationary_target(
+        ego_speed_kmh=case["ego_speed_kmh"],
+        ego_spawn_x=cfg.EGO_SPAWN["x"],
+        ego_spawn_y=cfg.EGO_SPAWN["y"],
+        target_spawn_x=cfg.INTRUDER_STOP["x"],
+        target_spawn_y=cfg.INTRUDER_STOP["y"],
+        gap_offset_m=cfg.GAP_OFFSET,
+        max_ticks=cfg.MAX_TICKS,
+        fixed_dt=cfg.FIXED_DT,
+    )

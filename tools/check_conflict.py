@@ -19,11 +19,14 @@ import math
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import config.scenario_cutin      as cfg_c
-import config.scenario_lead_brake as cfg_lb
-import config.scenario_ccrs       as cfg_ccrs
-import config.scenario_cutout     as cfg_co
-from core.conflict import cutin_is_conflict, lead_brake_is_conflict, ccrs_is_conflict, cutout_is_conflict
+import config.scenario_cutin          as cfg_c
+import config.scenario_lead_brake     as cfg_lb
+import config.scenario_ccrs           as cfg_ccrs
+import config.scenario_cutout         as cfg_co
+import config.scenario_junction_cutin as cfg_jc
+from core.conflict import (cutin_is_conflict, lead_brake_is_conflict,
+                            ccrs_is_conflict, cutout_is_conflict,
+                            junction_cutin_is_conflict)
 
 
 def check_cutin():
@@ -179,6 +182,46 @@ def check_cutout():
     return n_conflict, n_no, n_total
 
 
+def check_junction_cutin():
+    speeds    = cfg_jc.MATRIX["ego_speed_kmh"]
+    trig_vals = cfg_jc.MATRIX["trigger_d"]
+    mu_vals   = cfg_jc.MATRIX["mu"]
+    n_total   = len(speeds) * len(trig_vals) * len(mu_vals)
+
+    dist = math.hypot(cfg_jc.EGO_SPAWN["x"] - cfg_jc.INTRUDER_STOP["x"],
+                      cfg_jc.EGO_SPAWN["y"] - cfg_jc.INTRUDER_STOP["y"])
+    surface_gap = max(0.0, dist - cfg_jc.GAP_OFFSET)
+    max_time = cfg_jc.MAX_TICKS * cfg_jc.FIXED_DT
+
+    print("\n" + "=" * 72)
+    print("JUNCTION CUT-IN matrix conflict check  (train105, conflict = ego vs stationary intruder)")
+    print(f"  matrix: {len(speeds)} speeds × {len(trig_vals)} trigger_d × {len(mu_vals)} μ "
+          f"= {n_total} cases")
+    print(f"  speeds (km/h): {speeds}")
+    print(f"  trigger_d (m): {trig_vals}  [does not affect conflict formula]")
+    print(f"  ego→intruder_stop dist = {dist:.1f} m  |  GAP_OFFSET = {cfg_jc.GAP_OFFSET} m  "
+          f"→ surface_gap ≈ {surface_gap:.1f} m")
+    print(f"  MAX_TIME = {max_time:.0f} s")
+    print()
+    print(f"  {'speed':>8} {'trigger_d':>10} {'mu':>6}  t_conflict    conflict?")
+    print(f"  {'-'*8} {'-'*10} {'-'*6}  {'-'*11}  ---------")
+
+    n_conflict = 0
+    for v, td, mu in itertools.product(speeds, trig_vals, mu_vals):
+        case = {"ego_speed_kmh": v, "trigger_d": td}
+        flag = junction_cutin_is_conflict(case, cfg_jc)
+        if flag:
+            n_conflict += 1
+        v_ms = v / 3.6
+        t = surface_gap / v_ms if v_ms > 1e-3 else float("inf")
+        mark = "✓ conflict" if flag else "✗ no-conflict"
+        print(f"  {v:>5.0f} km/h  {td:>8.0f} m  {mu:>5.2f}  {t:>8.2f} s    {mark}")
+
+    n_no = n_total - n_conflict
+    print(f"\n  SUMMARY: {n_conflict}/{n_total} conflict,  {n_no}/{n_total} no-conflict")
+    return n_conflict, n_no, n_total
+
+
 def main():
     print("Kinematic conflict check — no simulation required.")
     print(f"LEAD_DECEL env: {os.environ.get('LEAD_DECEL', 'not set (using default 4.0)')}")
@@ -187,18 +230,20 @@ def main():
     lb_conf, lb_no, lb_tot  = check_lead_brake()
     cc_conf, cc_no, cc_tot  = check_ccrs()
     co_conf, co_no, co_tot  = check_cutout()
+    jc_conf, jc_no, jc_tot  = check_junction_cutin()
 
-    grand_conf = c_conf + lb_conf + cc_conf + co_conf
-    grand_no   = c_no   + lb_no   + cc_no   + co_no
-    grand_tot  = c_tot  + lb_tot  + cc_tot  + co_tot
+    grand_conf = c_conf + lb_conf + cc_conf + co_conf + jc_conf
+    grand_no   = c_no   + lb_no   + cc_no   + co_no   + jc_no
+    grand_tot  = c_tot  + lb_tot  + cc_tot  + co_tot  + jc_tot
 
     print("\n" + "=" * 72)
     print("GRAND TOTAL")
-    print(f"  cut-in:     {c_conf}/{c_tot} conflict  ({c_no} no-conflict)")
-    print(f"  lead-brake: {lb_conf}/{lb_tot} conflict  ({lb_no} no-conflict)")
-    print(f"  CCRs:       {cc_conf}/{cc_tot} conflict  ({cc_no} no-conflict)")
-    print(f"  cut-out:    {co_conf}/{co_tot} conflict  ({co_no} no-conflict)")
-    print(f"  TOTAL:      {grand_conf}/{grand_tot} conflict  ({grand_no} no-conflict)")
+    print(f"  cut-in:          {c_conf}/{c_tot} conflict  ({c_no} no-conflict)")
+    print(f"  lead-brake:      {lb_conf}/{lb_tot} conflict  ({lb_no} no-conflict)")
+    print(f"  CCRs:            {cc_conf}/{cc_tot} conflict  ({cc_no} no-conflict)")
+    print(f"  cut-out:         {co_conf}/{co_tot} conflict  ({co_no} no-conflict)")
+    print(f"  junction cut-in: {jc_conf}/{jc_tot} conflict  ({jc_no} no-conflict)")
+    print(f"  TOTAL:           {grand_conf}/{grand_tot} conflict  ({grand_no} no-conflict)")
     if grand_no == 0:
         print("\n  All cases are conflict cases.")
         print("  Rc_conflict = Rc_all for these matrices.")

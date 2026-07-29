@@ -14,6 +14,7 @@ A simulation test harness for Automatic Emergency Braking (AEB) controllers, bui
 | **Lead-brake (CCRb)** | scene03_2 | A lead vehicle ahead in the same lane (matching ego speed) brakes suddenly to a stop. Euro-NCAP CCRb. | `run_single_lead.py` / `run_matrix_lead.py` |
 | **CCRs** | train000 | Ego drives toward a stationary target vehicle. Euro-NCAP CCRs style. | `run_single_ccrs.py` / `run_matrix_ccrs.py` |
 | **Cut-out** | train000 | A lead vehicle occludes a stationary target, then cuts out to the right revealing it. | `run_single_cutout.py` / `run_matrix_cutout.py` |
+| **Junction Cut-in** | train105 | An intruder emerges from a junction on the left, turns right into the ego lane using real steering, then brakes to a full stop — a stationary blocker forcing AEB engagement. | `run_single_junction_cutin.py` / `run_matrix_junction_cutin.py` |
 
 All scenarios share the same session, actors, controllers, YOLO, metrics, and viz infrastructure.
 
@@ -30,7 +31,8 @@ config/
   scenario_cutin.py        ★ All parameters for cut-in (scene03_2, YOLO, μ, matrix, controllers)
   scenario_lead_brake.py   ★ All parameters for lead-brake (scene03_2; same structure)
   scenario_ccrs.py         ★ All parameters for CCRs (train000; 5×5×2=50 cases/controller)
-  scenario_cutout.py       ★ All parameters for cut-out (train000; 5×5×2=50 cases/controller)
+  scenario_cutout.py            ★ All parameters for cut-out (train000; 5×5×2=50 cases/controller)
+  scenario_junction_cutin.py   ★ All parameters for junction cut-in (train105; 5×5×2=50 cases/ctrl)
 core/
   carla_session.py         Open/close sync mode, restore original settings
   actors.py                Spawn vehicles, set tire friction μ, attach sensors;
@@ -46,8 +48,10 @@ core/
   runner_lead_brake.py     Single-case runner for lead-brake (returns LeadBrakeRecord)
   scenario_ccrs.py         CCRs scene logic (target always stationary; ego cruises)
   runner_ccrs.py           Single-case runner for CCRs (returns CCRsRecord)
-  scenario_cutout.py       Cut-out scene logic (lead cuts right after CUTOUT_TRIGGER_D)
-  runner_cutout.py         Single-case runner for cut-out (returns CutOutRecord)
+  scenario_cutout.py            Cut-out scene logic (lead cuts right after CUTOUT_TRIGGER_D)
+  runner_cutout.py              Single-case runner for cut-out (returns CutOutRecord)
+  scenario_junction_cutin.py    Junction cut-in logic (intruder turns right on trigger; brakes to stop)
+  runner_junction_cutin.py      Single-case runner for junction cut-in (returns JunctionCutInRecord)
 control/
   base_controller.py       ★ Plugin interface: throttle/brake/steer (BaseController)
   baseline_static_ttc.py   @register("baseline")          — Static TTC
@@ -67,8 +71,10 @@ run_single_lead.py         Lead-brake: run 1 case with display
 run_matrix_lead.py         Lead-brake: sweep full matrix → results/lead_matrix_*.csv
 run_single_ccrs.py         CCRs: run 1 case with display  [train000]
 run_matrix_ccrs.py         CCRs: sweep full matrix → results/ccrs_matrix_*.csv  [train000]
-run_single_cutout.py       Cut-out: run 1 case with display  [train000]
-run_matrix_cutout.py       Cut-out: sweep full matrix → results/cutout_matrix_*.csv  [train000]
+run_single_cutout.py            Cut-out: run 1 case with display  [train000]
+run_matrix_cutout.py            Cut-out: sweep full matrix → results/cutout_matrix_*.csv  [train000]
+run_single_junction_cutin.py    Junction cut-in: run 1 case with display  [train105]
+run_matrix_junction_cutin.py    Junction cut-in: sweep full matrix → results/junction_matrix_*.csv  [train105]
 run_perception_log.py      Run YOLO perception logging (background + actor passes)
 ```
 
@@ -88,7 +94,8 @@ run_perception_log.py      Run YOLO perception logging (background + actor passe
 ```bash
 python tools/check_conflict.py
 LEAD_DECEL=6.0 python tools/check_conflict.py   # verify with paper deceleration
-# Checks all 4 scenarios: cut-in (50), lead-brake (50), CCRs (50), cut-out (50) = 200 total
+# Checks all 5 scenarios: cut-in (50), lead-brake (50), CCRs (50), cut-out (50),
+#                          junction cut-in (50) = 250 total
 ```
 
 **Scenario 1 — Cut-in / Dart-out (scene03_2):**
@@ -124,15 +131,25 @@ TEST_MODE=latency python run_matrix_cutout.py
 MATRIX_VIZ=1 python run_matrix_cutout.py # enable display
 ```
 
+**Scenario 5 — Junction Cut-in (intruder from junction, train105):**
+```bash
+# Load train105 in CARLA first
+python run_single_junction_cutin.py               # debug single case with display
+python run_matrix_junction_cutin.py               # sweep 50 cases × 3 controllers → results/junction_matrix_*.csv
+TEST_MODE=latency python run_matrix_junction_cutin.py
+MATRIX_VIZ=1 python run_matrix_junction_cutin.py  # enable display
+```
+
 **Summarise results from existing CSVs (no CARLA needed):**
 ```bash
 python -m core.report results/matrix_*.csv
 python -m core.report results/lead_matrix_*.csv
 python -m core.report results/ccrs_matrix_*.csv
 python -m core.report results/cutout_matrix_*.csv
+python -m core.report results/junction_matrix_*.csv
 ```
 
-> Each scenario's results are independently prefixed: `matrix_` (cut-in), `lead_matrix_` (lead-brake), `ccrs_matrix_` (CCRs), `cutout_matrix_` (cut-out).
+> Each scenario's results are independently prefixed: `matrix_` (cut-in), `lead_matrix_` (lead-brake), `ccrs_matrix_` (CCRs), `cutout_matrix_` (cut-out), `junction_matrix_` (junction cut-in).
 
 ---
 
@@ -172,6 +189,7 @@ Each scenario has a pre-tuned spectator camera pose in its config (`SPECTATOR_TF
 |---|---|
 | `scenario_cutin.py` / `scenario_lead_brake.py` | x=2.07, y=−0.69, z=1.87, yaw=−91.22° |
 | `scenario_ccrs.py` / `scenario_cutout.py` | x=5.27, y=−0.18, z=0.67, yaw=−143.44° |
+| `scenario_junction_cutin.py` | `SPECTATOR_TF = None` `[TO BE TUNED]` |
 
 ---
 
@@ -243,12 +261,19 @@ Sweep constants (`LATENCY_DELAY_FRAMES`, `NOISE_SIGMA_M_SWEEP`, `COMP_CONTROLLER
 | **Cut-out** | **train000** | `ego_speed_kmh` | 20, 30, 40, 50, 60 km/h | **50** |
 | Cut-out | train000 | `reveal_ttc` | 1.0, 1.5, 2.0, 2.5, 3.0 s (TTC at cut-out trigger) | |
 | Cut-out | train000 | `mu` | 0.85 (dry), 0.40 (wet) | |
+| **Junction Cut-in** | **train105** | `ego_speed_kmh` | 20, 30, 40, 50, 60 km/h | **50** |
+| Junction Cut-in | train105 | `trigger_d` | 20, 25, 30, 35, 40 m (ego↔intruder distance at turn trigger) | |
+| Junction Cut-in | train105 | `mu` | 0.85 (dry), 0.40 (wet) | |
 
 **Cut-out fixed headway:** `FIXED_HEADWAY_THW = 0.8 s` (not swept). `headway_d` and `cutout_trigger_d` are derived per case from `reveal_ttc` in `run_matrix_cutout.py`. Diagnostic columns `range_at_reveal`, `ttc_at_reveal`, `time_reveal_to_brake` are written to the CSV and summarised by `core/report.py`. Hardest case (`reveal_ttc = 1.0`, 20 km/h): `cutout_trigger_d ≈ 5.6 m`, lead-to-target surface gap ≈ 1.1 m — verify CARLA physics before running; if the lead cannot complete the lane change, increase `GAP_OFFSET` slightly (e.g. 5.0 m), not the matrix values.
 
 **CCRs approach distance:** Target spawned per case at `EGO_SPAWN + approach_d × forward_vector`, covering short/medium/long TTC-at-spawn scenarios (TTC@30m+60km/h ≈ 1.5 s; TTC@70m+20km/h ≈ 11.8 s). Target coordinates `target_x`/`target_y` are passed through the case dict.
 
-**Case count:** 50 / 50 / 50 / 50 cases/controller × 3 controllers = 150 runs per scenario (= 600 total across all 4 scenarios for `TEST_MODE=original`).
+**Junction cut-in trigger_d:** Distance at which the intruder begins its right turn from the junction into the ego lane. Larger `trigger_d` = intruder turns earlier = more warning time for AEB. Conflict is independent of `trigger_d` (intruder always ends up at `INTRUDER_STOP`). See `config/scenario_junction_cutin.py` for `INTRUDER_STOP`, `TURN_HEADING_DEG`, and the physics-steering constants `[TO BE TUNED]`.
+
+**z on train105:** EGO z=10.17, INTRUDER z=11.12 — fixed config values used directly (no cast_ray / ground-projection). The ground on this map sits at a high absolute z (~10–11 m); the same fixed-z strategy as train000 applies (see §Spawn Safety).
+
+**Case count:** 50 / 50 / 50 / 50 / 50 cases/controller × 3 controllers = 150 runs per scenario (= 750 total across all 5 scenarios for `TEST_MODE=original`).
 
 ---
 
@@ -343,6 +368,7 @@ Results are written to `results/`:
 - `lead_matrix_*.csv` — lead-brake runs
 - `ccrs_matrix_*.csv` — CCRs runs (train000)
 - `cutout_matrix_*.csv` — cut-out runs (train000)
+- `junction_matrix_*.csv` — junction cut-in runs (train105)
 
 Key CSV columns: `label`, `controller`, `ego_speed_kmh`, `mu`, `avoided`, `s_clearance` (surface gap, m), `a_b_mfdd` (MFDD, m/s²), `t_c_warn` (TTC at brake onset, s), `dv_speed_var` (Δv, km/h), `is_conflict`, `peak_decel`, `a_max`. Latency-compensation runs add `comp_source` (`""`/`oracle`/`mismatched`) and `comp_L_frames` (the L actually used to compensate, in frames — may differ from `delay_frames` under `mismatched`). These columns default empty/0, so older CSVs still load in `report.py`.
 
