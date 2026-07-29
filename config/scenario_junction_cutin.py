@@ -51,17 +51,17 @@ SPECTATOR_TF = None   # set to dict(x=..., y=..., z=..., yaw=...) once tuned
 # z values are fixed from first working run — do NOT use cast_ray or
 # ground-projection (see README §Spawn Safety and TECHNICAL_DOC.md).
 # High z (~10–11 m) is expected: this map's ground sits at a high absolute z.
-EGO_SPAWN = dict(x=39.56, y=-89.23, z=10.17, yaw=-88.65)
+EGO_SPAWN = dict(x=39.56, y=-89.23, z=10.0, yaw=-90.0)
 
 # Intruder: starts at junction entrance (heading +x, yaw≈0); turns right on trigger.
-INTRUDER_SPAWN = dict(x=32.34, y=-160.22, z=11.12, yaw=1.51,
+INTRUDER_SPAWN = dict(x=32.34, y=-160.22, z=10.0, yaw=1.51,
                       model="vehicle.ue4.audi.tt")
 
 # Intruder stop position: where the intruder comes to rest blocking the ego lane.
 # Used only for the kinematic conflict check (core/conflict.py).
 # [TO BE TUNED in CARLA: set to the ego-lane centre where the intruder stops after the turn]
 # Placeholder: ego lane x, junction y — adjust once observed in CARLA.
-INTRUDER_STOP = dict(x=39.56, y=-165.0, z=11.12)   # [TO BE TUNED]
+INTRUDER_STOP = dict(x=40.14, y=-144.77, z=10.0)   # [TO BE TUNED]
 
 # ── Turn trigger distance ─────────────────────────────────────────────────
 # Intruder begins turning when ego↔intruder distance falls to this value (m).
@@ -75,7 +75,7 @@ TURN_TRIGGER_D = 30.0   # m  [TO BE TUNED]
 # Offset needed ≈ -90° to align with ego lane.
 # ⚠ If the intruder turns the WRONG way in CARLA, negate this value (+90.0).
 #   Same sign convention as CUTOUT_HEADING_DEG (positive = right in CARLA world).
-TURN_HEADING_DEG = -90.0   # degrees  [TO BE TUNED — flip sign if wrong direction]
+TURN_HEADING_DEG = 75.0   # degrees  [TO BE TUNED — flip sign if wrong direction]
 
 # After aligning into the ego lane, intruder brakes to a full stop.
 AFTER_TURN_STOP = True   # always True for this scenario (creates a stationary blocker)
@@ -92,8 +92,8 @@ JCUTIN_SETTLE_DEG = 8.0    # |heading error| (°) below which intruder is consid
                              # aligned with ego lane → transitions to SETTLED/STOP.
 #
 # Speed P-controller (active during the turn):
-JCUTIN_SPEED_K        = 0.5   # throttle/brake P-gain per m/s speed error
-JCUTIN_MAX_THROTTLE   = 0.6   # max throttle command (0–1)
+JCUTIN_SPEED_K        = 1.2   # throttle/brake P-gain per m/s speed error
+JCUTIN_MAX_THROTTLE   = 0.6  # max throttle command (0–1)
 
 # ── Cameras ───────────────────────────────────────────────────────────
 CAM_W, CAM_H = 1280, 720
@@ -123,8 +123,8 @@ DETECTION_SOURCE  = "groundtruth"
 INPATH_HALF_WIDTH = 1.8    # half lane width (m)
 INPATH_MAX_RANGE  = 80.0   # covers ego-spawn to intruder-stop distance (~76 m)
 
-INPATH_PREDICT    = False   # intruder is stationary until it enters the lane
-INPATH_LOOKAHEAD  = 0.0
+INPATH_PREDICT    = True   # intruder is stationary until it enters the lane
+INPATH_LOOKAHEAD  = 1.5
 
 # ── Camera frame synchronisation ──
 FRAME_SYNC = True
@@ -146,7 +146,7 @@ MU_WET = 0.40
 SINGLE_CASE = dict(
     ego_speed_kmh = 40.0,
     mu            = MU_DRY,
-    trigger_d     = 30.0,   # ego↔intruder distance at which the turn begins (m)
+    trigger_d     = 80.0,   # ego↔intruder distance at which the turn begins (m)
 )
 SINGLE_CONTROLLER   = "proposed_enhanced"
 SINGLE_DELAY_FRAMES = 0
@@ -161,9 +161,9 @@ SHOW_WINDOW         = True
 #  Conflict is independent of trigger_d (intruder always stops at INTRUDER_STOP).
 # ══════════════════════════════════════════════════════════════════
 MATRIX = dict(
-    ego_speed_kmh = [20.0, 30.0, 40.0, 50.0, 60.0],
+    ego_speed_kmh = [20.0,30.0, 40.0, 50.0, 60.0], # [20.0, 30.0, 40.0, 50.0, 60.0]
     mu            = [MU_DRY, MU_WET],
-    trigger_d     = [20.0, 25.0, 30.0, 35.0, 40.0],
+    trigger_d     = [70.0, 80.0, 90.0, 100.0, 110.0] # [60.0, 65.0, 70.0, 75.0, 80.0,]
 )
 
 CONTROLLERS = ["baseline", "proposed", "proposed_enhanced"]
