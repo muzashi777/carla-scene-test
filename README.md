@@ -1,6 +1,6 @@
 # AEB Test Harness — 3DGS + UE5.5 → CARLA
 
-A simulation test harness for Automatic Emergency Braking (AEB) controllers, built for a 3D Gaussian Splatting scene imported into CARLA via UE5.5. Supports four independent test scenarios with three swappable controllers. Results are reported in the ICARCV 2026 paper *"A Real-to-Simulation Workflow for AEB Controller Testing Using 3D Gaussian Splatting in CARLA"*.
+A simulation test harness for Automatic Emergency Braking (AEB) controllers, built for a 3D Gaussian Splatting scene imported into CARLA via UE5.5. Supports six independent test scenarios with three swappable controllers. Results are reported in the ICARCV 2026 paper *"A Real-to-Simulation Workflow for AEB Controller Testing Using 3D Gaussian Splatting in CARLA"*.
 
 **Paper results:** cut-in `Rc_conflict` 44.0% → 72.0%; lead-brake 34.0% → 68.0% (baseline → proposed_enhanced).
 
@@ -140,6 +140,9 @@ MATRIX_VIZ=1 python run_matrix_cutout.py # enable display
 **Scenario 5 — Junction Cut-in (intruder from junction, train105):**
 ```bash
 # Load train105 in CARLA first
+# Note: z values (EGO z=10.0, INTRUDER z=10.0) are fixed config constants —
+#       do NOT use cast_ray() or ground-projection (3DGS mesh returns unstable z).
+#       SPECTATOR_TF, TURN_HEADING_DEG, INTRUDER_STOP, and steering constants must be tuned in CARLA.
 python run_single_junction_cutin.py               # debug single case with display
 python run_matrix_junction_cutin.py               # sweep 50 cases × 3 controllers → results/junction_matrix_*.csv
 TEST_MODE=latency python run_matrix_junction_cutin.py
@@ -209,6 +212,7 @@ Each scenario has a pre-tuned spectator camera pose in its config (`SPECTATOR_TF
 | `scenario_cutin.py` / `scenario_lead_brake.py` | x=2.07, y=−0.69, z=1.87, yaw=−91.22° |
 | `scenario_ccrs.py` / `scenario_cutout.py` | x=5.27, y=−0.18, z=0.67, yaw=−143.44° |
 | `scenario_junction_cutin.py` | `SPECTATOR_TF = None` `[TO BE TUNED]` |
+| `scenario_cutout_train108.py` | `SPECTATOR_TF = None` `[TO BE TUNED]` |
 
 ---
 
@@ -281,18 +285,23 @@ Sweep constants (`LATENCY_DELAY_FRAMES`, `NOISE_SIGMA_M_SWEEP`, `COMP_CONTROLLER
 | Cut-out | train000 | `reveal_ttc` | 1.0, 1.5, 2.0, 2.5, 3.0 s (TTC at cut-out trigger) | |
 | Cut-out | train000 | `mu` | 0.85 (dry), 0.40 (wet) | |
 | **Junction Cut-in** | **train105** | `ego_speed_kmh` | 20, 30, 40, 50, 60 km/h | **50** |
-| Junction Cut-in | train105 | `trigger_d` | 20, 25, 30, 35, 40 m (ego↔intruder distance at turn trigger) | |
+| Junction Cut-in | train105 | `trigger_d` | 70, 80, 90, 100, 110 m (ego↔intruder distance at turn trigger) | |
 | Junction Cut-in | train105 | `mu` | 0.85 (dry), 0.40 (wet) | |
+| **Cut-out (train108)** | **train108** | `ego_speed_kmh` | 20, 30, 40, 50, 60 km/h | **50** |
+| Cut-out (train108) | train108 | `reveal_ttc` | 1.0, 1.5, 2.0, 2.5, 3.0 s (TTC at cut-out trigger) | |
+| Cut-out (train108) | train108 | `mu` | 0.85 (dry), 0.40 (wet) | |
 
-**Cut-out fixed headway:** `FIXED_HEADWAY_THW = 0.8 s` (not swept). `headway_d` and `cutout_trigger_d` are derived per case from `reveal_ttc` in `run_matrix_cutout.py`. Diagnostic columns `range_at_reveal`, `ttc_at_reveal`, `time_reveal_to_brake` are written to the CSV and summarised by `core/report.py`. Hardest case (`reveal_ttc = 1.0`, 20 km/h): `cutout_trigger_d ≈ 5.6 m`, lead-to-target surface gap ≈ 1.1 m — verify CARLA physics before running; if the lead cannot complete the lane change, increase `GAP_OFFSET` slightly (e.g. 5.0 m), not the matrix values.
+**Cut-out fixed headway:** `FIXED_HEADWAY_THW = 0.7 s` (not swept). `headway_d` and `cutout_trigger_d` are derived per case from `reveal_ttc` in `run_matrix_cutout.py`. Diagnostic columns `range_at_reveal`, `ttc_at_reveal`, `time_reveal_to_brake` are written to the CSV and summarised by `core/report.py`. Hardest case (`reveal_ttc = 1.0`, 20 km/h): `cutout_trigger_d ≈ 5.6 m`, lead-to-target surface gap ≈ 1.1 m — verify CARLA physics before running; if the lead cannot complete the lane change, increase `GAP_OFFSET` slightly (e.g. 5.0 m), not the matrix values.
 
 **CCRs approach distance:** Target spawned per case at `EGO_SPAWN + approach_d × forward_vector`, covering short/medium/long TTC-at-spawn scenarios (TTC@30m+60km/h ≈ 1.5 s; TTC@70m+20km/h ≈ 11.8 s). Target coordinates `target_x`/`target_y` are passed through the case dict.
 
-**Junction cut-in trigger_d:** Distance at which the intruder begins its right turn from the junction into the ego lane. Larger `trigger_d` = intruder turns earlier = more warning time for AEB. Conflict is independent of `trigger_d` (intruder always ends up at `INTRUDER_STOP`). See `config/scenario_junction_cutin.py` for `INTRUDER_STOP`, `TURN_HEADING_DEG`, and the physics-steering constants `[TO BE TUNED]`.
+**Junction cut-in trigger_d:** Distance (m) at which the intruder begins its right turn from the junction. The initial ego↔intruder separation at spawn is ≈71 m. With the configured values of 70–110 m, only the 70 m level fires slightly after spawn (ego must close ~1 m first); all larger values (80–110 m) exceed the initial separation and trigger immediately during settle ticks. The `trigger_d` axis therefore does **not** vary warning time across the configured range — all levels give effectively the same (maximum) warning. Conflict is independent of `trigger_d` (intruder always stops at `INTRUDER_STOP`). `INPATH_PREDICT = True` / `INPATH_LOOKAHEAD = 1.5 s` — the AEB detects the moving intruder predictively once its projected position enters the ego corridor. See `config/scenario_junction_cutin.py` for `INTRUDER_STOP`, `TURN_HEADING_DEG`, and the physics-steering constants `[TO BE TUNED]`.
 
-**z on train105:** EGO z=10.17, INTRUDER z=11.12 — fixed config values used directly (no cast_ray / ground-projection). The ground on this map sits at a high absolute z (~10–11 m); the same fixed-z strategy as train000 applies (see §Spawn Safety).
+**Cut-out (train108) matrix:** Identical axes and values to Cut-out (train000): `reveal_ttc` as primary variable, `FIXED_HEADWAY_THW = 0.7 s` (not swept; same headway floor/clamp logic applies). `CUTOUT_HEADING_DEG = −35.0°` [TO BE TUNED] — differs from train000 (30.0°). Results prefix: `cutout108_matrix_`.
 
-**Case count:** 50 / 50 / 50 / 50 / 50 cases/controller × 3 controllers = 150 runs per scenario (= 750 total across all 5 scenarios for `TEST_MODE=original`).
+**z on train105:** EGO z=10.0, INTRUDER z=10.0 — fixed config values used directly (no cast_ray / ground-projection). The ground on this map sits at a high absolute z (~10 m); the same fixed-z strategy as train000 applies (see §Spawn Safety). *(corrected 2026-07-30: both z values updated from earlier placeholder values 10.17 / 11.12)*
+
+**Case count:** 50 × 6 scenarios × 3 controllers = 150 runs per scenario (= 900 total across all 6 scenarios for `TEST_MODE=original`).
 
 ---
 
@@ -388,6 +397,7 @@ Results are written to `results/`:
 - `ccrs_matrix_*.csv` — CCRs runs (train000)
 - `cutout_matrix_*.csv` — cut-out runs (train000)
 - `junction_matrix_*.csv` — junction cut-in runs (train105)
+- `cutout108_matrix_*.csv` — cut-out runs (train108)
 
 Key CSV columns: `label`, `controller`, `ego_speed_kmh`, `mu`, `avoided`, `s_clearance` (surface gap, m), `a_b_mfdd` (MFDD, m/s²), `t_c_warn` (TTC at brake onset, s), `dv_speed_var` (Δv, km/h), `is_conflict`, `peak_decel`, `a_max`. Latency-compensation runs add `comp_source` (`""`/`oracle`/`mismatched`) and `comp_L_frames` (the L actually used to compensate, in frames — may differ from `delay_frames` under `mismatched`). These columns default empty/0, so older CSVs still load in `report.py`.
 

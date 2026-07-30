@@ -108,19 +108,19 @@ Formula: 5 × 5 × 2 = **50 cases**. Total with 3 controllers: **150 runs**.
 | `ego_speed_kmh` | 20, 30, 40, 50, 60 km/h |
 | `reveal_ttc` | 1.0, 1.5, 2.0, 2.5, 3.0 s (TTC to stationary target at cut-out trigger) |
 | `mu` | 0.85 (dry), 0.40 (wet) |
-| `FIXED_HEADWAY_THW` | **0.8 s** (fixed, not swept) |
+| `FIXED_HEADWAY_THW` | **0.7 s** (fixed, not swept) |
 
 Formula: 5 × 5 × 2 = **50 cases**. Total with 3 controllers: **150 runs**.
 
 **Derived geometry (per case):**
 ```
-headway_d        = FIXED_HEADWAY_THW × ego_ms   (= 0.8 × ego_ms)
-cutout_trigger_d = (reveal_ttc − 0.8) × ego_ms + GAP_OFFSET
+headway_d        = FIXED_HEADWAY_THW × ego_ms   (= 0.7 × ego_ms)
+cutout_trigger_d = (reveal_ttc − 0.7) × ego_ms + GAP_OFFSET
 ```
 
 All 50 cases have `cutout_trigger_d > 0` (min: 5.61 m at 20 km/h + reveal_ttc=1.0). Conflict is defined against the stationary target and is independent of `reveal_ttc` — all 50 cases are conflict cases (worst: 20 km/h → t = 7.9 s < 20 s window).
 
-**Spawn geometry:** At 20 km/h, `headway_d = 0.8 × 5.556 = 4.444 m`. This is below the combined ego + lead half-lengths (≈ 4.5 m from `GAP_OFFSET`), causing bounding-box overlap and a CARLA spawn rejection. `runner_cutout.py` enforces a minimum headway (`SPAWN_CLEARANCE_M = 0.5 m`) and clamps to ~5.0 m. At `reveal_ttc = 1.0` the post-clamp trigger surface gap is only 0.556 m (0.10 s at 20 km/h) — the physics-based lane change cannot complete; these cells are marked `result_txt = "SCENARIO_INFEASIBLE"` and retained in the CSV (filtered in analysis). See `tools/check_cutout_spawn.py` for the full per-cell feasibility table.
+**Spawn geometry:** At 20 km/h, `headway_d = max(0.7 × 5.556, MIN_HEADWAY_M) = max(3.889, 5.0) = 5.0 m` (floor clamps). Before `MIN_HEADWAY_M` was added the raw THW headway of 3.889 m was below the combined ego + lead half-lengths (≈ 4.5 m from `GAP_OFFSET`), causing bounding-box overlap and a CARLA spawn rejection. `runner_cutout.py` enforces a minimum headway (`SPAWN_CLEARANCE_M = 0.5 m`) and clamps to ~5.0 m. At `reveal_ttc = 1.0` the post-clamp trigger surface gap is only 0.556 m (0.10 s at 20 km/h) — the physics-based lane change cannot complete; these cells are marked `result_txt = "SCENARIO_INFEASIBLE"` and retained in the CSV (filtered in analysis). See `tools/check_cutout_spawn.py` for the full per-cell feasibility table.
 
 ---
 
@@ -2119,7 +2119,7 @@ t_conflict   = surface_gap / v_ego
 is_conflict  = t_conflict ≤ MAX_TICKS × FIXED_DT (20 s)
 ```
 
-`trigger_d` does **not** appear in the formula — the intruder always stops at `INTRUDER_STOP` regardless of when it starts turning.  With the placeholder `INTRUDER_STOP` (x=39.56, y=−165.0), all 50 cases are conflict cases (worst: 20 km/h → t ≈ 12.7 s < 20 s).
+`trigger_d` does **not** appear in the formula — the intruder always stops at `INTRUDER_STOP` regardless of when it starts turning.  With the current placeholder `INTRUDER_STOP` (x=40.14, y=−144.77, z=10.0) `[TO BE TUNED]`, all 50 cases are conflict cases (worst: 20 km/h → t ≈ 9.2 s < 20 s). *(corrected 2026-07-30: placeholder updated from (39.56, −165.0, 11.12); worst-case t recomputed from new coordinates)*
 
 #### Reuse of cut-out steering (Rev 2026-07-22b)
 
@@ -2129,7 +2129,7 @@ is_conflict  = t_conflict ≤ MAX_TICKS × FIXED_DT (20 s)
 |---|---|---|
 | Phases | CRUISE → STEER → STRAIGHTEN → SETTLED | CRUISE → STEER → SETTLED (no STRAIGHTEN) |
 | Trigger condition | `dist(lead, target) ≤ CUTOUT_TRIGGER_D` | `dist(ego, intruder) ≤ TURN_TRIGGER_D` |
-| Steer target | `trigger_yaw + CUTOUT_HEADING_DEG` (≈30°) | `trigger_yaw + TURN_HEADING_DEG` (≈−90°) |
+| Steer target | `trigger_yaw + CUTOUT_HEADING_DEG` (≈30°) | `trigger_yaw + TURN_HEADING_DEG` (≈75°) |
 | Phase transition | lateral_offset ≥ LANE_WIDTH | |heading_error_to_target| < SETTLE_DEG |
 | Post-manoeuvre | cruise or stop (CUTOUT_AFTER_STOP) | always brake to full stop (AFTER_TURN_STOP=True) |
 | Velocity boot | in start() | none (starts from rest; CRUISE holds hand_brake) |
@@ -2138,7 +2138,11 @@ All control is via `apply_control(VehicleControl(...))` in the loop; no `set_tar
 
 #### Fixed z for train105
 
-`EGO_SPAWN z=10.17`, `INTRUDER_SPAWN z=11.12` — fixed config values used directly.  Ground on train105 sits at ≈10–11 m absolute z.  Same rationale as train000 (Rev 2026-07-22): `world.cast_ray()` is unreliable on 3DGS collision meshes.
+`EGO_SPAWN z=10.0`, `INTRUDER_SPAWN z=10.0` — fixed config values used directly.  Ground on train105 sits at ≈10 m absolute z.  Same rationale as train000 (Rev 2026-07-22): `world.cast_ray()` is unreliable on 3DGS collision meshes. *(corrected 2026-07-30: both z values updated from earlier placeholder values 10.17 / 11.12)*
+
+#### Detection: predictive corridor (`INPATH_PREDICT`)
+
+`INPATH_PREDICT = True` and `INPATH_LOOKAHEAD = 1.5 s` are enabled.  The AEB detects the intruder predictively — as soon as its projected position 1.5 s ahead falls inside the ego corridor — rather than waiting for it to physically cross the lane centre.  This mirrors the cut-in detection strategy and is appropriate because the intruder is moving into the lane (unlike cut-out, where the stationary target is already directly ahead and `INPATH_PREDICT = False`).
 
 #### Existing-behaviour guarantee
 
@@ -2152,10 +2156,10 @@ All control is via `apply_control(VehicleControl(...))` in the loop; no `set_tar
 
 | Constant | Location | Notes |
 |---|---|---|
-| `INTRUDER_STOP` | `config/scenario_junction_cutin.py` | Placeholder at (39.56, −165.0, 11.12); set to observed intruder stop position after first live run |
+| `INTRUDER_STOP` | `config/scenario_junction_cutin.py` | Placeholder at (40.14, −144.77, 10.0) `[TO BE TUNED]`; set to observed intruder stop position after first live run *(corrected 2026-07-30)* |
 | `SPECTATOR_TF` | `config/scenario_junction_cutin.py` | `None` until tuned; set to `dict(x=…, y=…, z=…, yaw=…)` |
 | `TURN_TRIGGER_D` | `config/scenario_junction_cutin.py` | Default 30 m; adjust so trigger fires at a useful ego↔intruder distance |
-| `TURN_HEADING_DEG` | `config/scenario_junction_cutin.py` | Default −90°; negate (+90°) if intruder turns the wrong way in CARLA |
+| `TURN_HEADING_DEG` | `config/scenario_junction_cutin.py` | Default 75.0° `[TO BE TUNED]`; negate (−75.0°) if intruder turns the wrong way in CARLA *(corrected 2026-07-30 from −90°)* |
 | `JCUTIN_STEER_K`, `JCUTIN_STEER_MAX`, `JCUTIN_SETTLE_DEG` | `config/scenario_junction_cutin.py` | P-heading gains; use cut-out tuning guide as reference (TECHNICAL_DOC.md Rev 2026-07-22b) |
 | `JCUTIN_SPEED_K`, `JCUTIN_MAX_THROTTLE` | `config/scenario_junction_cutin.py` | P-speed gains |
 
@@ -2198,7 +2202,7 @@ The existing Cut-out scenario (train000) was ported to a new map, **train108**. 
 
 | File | Role |
 |---|---|
-| `config/scenario_cutout_train108.py` | All train108 parameters — only `EXPECTED_SCENE`, `EGO_SPAWN`, `TARGET_SPAWN`, `LEAD_SPAWN` (z/yaw), `SPECTATOR_TF`, and `RESULTS_PREFIX` differ from `config/scenario_cutout.py` |
+| `config/scenario_cutout_train108.py` | All train108 parameters — only `EXPECTED_SCENE`, `EGO_SPAWN`, `TARGET_SPAWN`, `LEAD_SPAWN` (z/yaw), `SPECTATOR_TF`, `CUTOUT_HEADING_DEG`, and `RESULTS_PREFIX` differ from `config/scenario_cutout.py` |
 | `run_single_cutout_train108.py` | Entry point: single case with display → reuses `core/runner_cutout.run_case()` |
 | `run_matrix_cutout_train108.py` | Entry point: matrix run → `results/cutout108_matrix_*.csv` |
 
@@ -2254,7 +2258,7 @@ At 20 km/h (worst case): t_conflict ≈ 13.9 s < 20 s → all 50 cases are confl
 | `CUTOUT_TRIGGER_TTC` | `config/scenario_cutout_train108.py` | Default 1.9 s (same as train000); adjust so the target is revealed late enough to challenge AEB |
 | `SPECTATOR_TF` | `config/scenario_cutout_train108.py` | `None` until tuned; set to `dict(x=…, y=…, z=…, yaw=…)` |
 | `TARGET_SPAWN` (x, y, z) | `config/scenario_cutout_train108.py` | Confirm the parked car actually rests at (39.65, −198.00, 12.14) after first live run |
-| `CUTOUT_HEADING_DEG` | `config/scenario_cutout_train108.py` | Default 30.0° (right); negate to −30.0° if lead turns left in CARLA |
+| `CUTOUT_HEADING_DEG` | `config/scenario_cutout_train108.py` | Default −35.0° `[TO BE TUNED]`; set positive (e.g. +30°) if lead turns left instead of right in CARLA *(corrected 2026-07-30 from 30.0°; config currently −35.0°)* |
 
 #### How to verify (no CARLA)
 

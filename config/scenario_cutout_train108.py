@@ -82,7 +82,7 @@ CUTOUT_LANE_WIDTH    = 1.5   # m — lateral displacement (in lead's right-frame
                               #     "successfully in the right lane" [TO BE TUNED]
 #
 # Heading offset during steer-right phase:
-CUTOUT_HEADING_DEG   = 30.0  # degrees — target yaw offset while steering right.
+CUTOUT_HEADING_DEG   = -35.0  # degrees — target yaw offset while steering right.
                               # Positive = turns right in CARLA convention (steer > 0).
                               # ⚠ If the lead turns LEFT, set this to -30.0. [TO BE TUNED]
 #
@@ -90,7 +90,7 @@ CUTOUT_HEADING_DEG   = 30.0  # degrees — target yaw offset while steering righ
 CUTOUT_STEER_K       = 0.05  # steer command per degree of heading error [TO BE TUNED]
                               # Too low → sluggish / doesn't reach target lane.
                               # Too high → oscillates / twitches.
-CUTOUT_STEER_MAX     = 0.4   # max |steer| sent to CARLA (0–1) [TO BE TUNED]
+CUTOUT_STEER_MAX     = 0.7   # max |steer| sent to CARLA (0–1) [TO BE TUNED]
                               # 0.4 ≈ moderate lane-change arc; increase for sharper cut-out.
 #
 # Straighten-complete threshold:
@@ -100,7 +100,7 @@ CUTOUT_SETTLE_DEG    = 5.0   # |heading error| (°) below which the lead is cons
 CUTOUT_AFTER_STOP    = True  # False = keep cruising in right lane; True = decelerate to stop
 #
 # Longitudinal speed controller (used in all phases):
-LEAD_SPEED_K            = 0.5   # throttle/brake per m/s speed error (P-gain) [TO BE TUNED]
+LEAD_SPEED_K            = 1.0   # throttle/brake per m/s speed error (P-gain) [TO BE TUNED]
                                  # Too low → drifts from target speed.
                                  # Too high → oscillates throttle/brake.
 LEAD_SPEED_MAX_THROTTLE = 0.6   # max throttle command (0–1) [TO BE TUNED]
