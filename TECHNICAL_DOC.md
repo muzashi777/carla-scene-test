@@ -2157,7 +2157,7 @@ All control is via `apply_control(VehicleControl(...))` in the loop; no `set_tar
 | Constant | Location | Notes |
 |---|---|---|
 | `INTRUDER_STOP` | `config/scenario_junction_cutin.py` | Placeholder at (40.14, −144.77, 10.0) `[TO BE TUNED]`; set to observed intruder stop position after first live run *(corrected 2026-07-30)* |
-| `SPECTATOR_TF` | `config/scenario_junction_cutin.py` | `None` until tuned; set to `dict(x=…, y=…, z=…, yaw=…)` |
+| `SPECTATOR_TF` | `config/scenario_junction_cutin.py` | `dict(x=42.69, y=-79.03, z=12.94, yaw=-97.20)` *(set 2026-07-30)* |
 | `TURN_TRIGGER_D` | `config/scenario_junction_cutin.py` | Default 30 m; adjust so trigger fires at a useful ego↔intruder distance |
 | `TURN_HEADING_DEG` | `config/scenario_junction_cutin.py` | Default 75.0° `[TO BE TUNED]`; negate (−75.0°) if intruder turns the wrong way in CARLA *(corrected 2026-07-30 from −90°)* |
 | `JCUTIN_STEER_K`, `JCUTIN_STEER_MAX`, `JCUTIN_SETTLE_DEG` | `config/scenario_junction_cutin.py` | P-heading gains; use cut-out tuning guide as reference (TECHNICAL_DOC.md Rev 2026-07-22b) |
@@ -2256,7 +2256,7 @@ At 20 km/h (worst case): t_conflict ≈ 13.9 s < 20 s → all 50 cases are confl
 |---|---|---|
 | `LEAD_SPAWN["z"]` | `config/scenario_cutout_train108.py` | Default 10.70 (matches ego z); adjust if lead spawns inside the road surface |
 | `CUTOUT_TRIGGER_TTC` | `config/scenario_cutout_train108.py` | Default 1.9 s (same as train000); adjust so the target is revealed late enough to challenge AEB |
-| `SPECTATOR_TF` | `config/scenario_cutout_train108.py` | `None` until tuned; set to `dict(x=…, y=…, z=…, yaw=…)` |
+| `SPECTATOR_TF` | `config/scenario_cutout_train108.py` | `dict(x=42.78, y=-106.76, z=12.03, yaw=-89.63)` *(set 2026-07-30)* |
 | `TARGET_SPAWN` (x, y, z) | `config/scenario_cutout_train108.py` | Confirm the parked car actually rests at (39.65, −198.00, 12.14) after first live run |
 | `CUTOUT_HEADING_DEG` | `config/scenario_cutout_train108.py` | Default −35.0° `[TO BE TUNED]`; set positive (e.g. +30°) if lead turns left instead of right in CARLA *(corrected 2026-07-30 from 30.0°; config currently −35.0°)* |
 

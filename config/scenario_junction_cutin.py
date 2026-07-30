@@ -44,8 +44,8 @@ GRAVITY      = 9.81
 # ── Scene-name check ─────────────────────────────────────────────
 EXPECTED_SCENE = "train105"
 
-# ── Spectator camera [TO BE TUNED in CARLA] ──────────────────────
-SPECTATOR_TF = None   # set to dict(x=..., y=..., z=..., yaw=...) once tuned
+# ── Spectator camera ──────────────────────────────────────────────
+SPECTATOR_TF = dict(x=42.69, y=-79.03, z=12.94, yaw=-97.20)
 
 # ── Vehicle Positions (world coordinates, train105 scene) ─────────────────
 # z values are fixed from first working run — do NOT use cast_ray or

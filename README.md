@@ -211,8 +211,8 @@ Each scenario has a pre-tuned spectator camera pose in its config (`SPECTATOR_TF
 |---|---|
 | `scenario_cutin.py` / `scenario_lead_brake.py` | x=2.07, y=−0.69, z=1.87, yaw=−91.22° |
 | `scenario_ccrs.py` / `scenario_cutout.py` | x=5.27, y=−0.18, z=0.67, yaw=−143.44° |
-| `scenario_junction_cutin.py` | `SPECTATOR_TF = None` `[TO BE TUNED]` |
-| `scenario_cutout_train108.py` | `SPECTATOR_TF = None` `[TO BE TUNED]` |
+| `scenario_junction_cutin.py` | x=42.69, y=−79.03, z=12.94, yaw=−97.20° |
+| `scenario_cutout_train108.py` | x=42.78, y=−106.76, z=12.03, yaw=−89.63° |
 
 ---
 

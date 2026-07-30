@@ -43,7 +43,7 @@ GRAVITY   = 9.81
 EXPECTED_SCENE = "train108"
 
 # ── Spectator camera for train108 ─────────────────────────────────
-SPECTATOR_TF = None  # [TO BE TUNED in CARLA]
+SPECTATOR_TF = dict(x=42.78, y=-106.76, z=12.03, yaw=-89.63)
 
 # ── Vehicle Positions (world coordinates, train108 scene) ─────────────────
 # Ego yaw=-90.39°; forward ≈ (cos(-90.39°), sin(-90.39°)) ≈ (-0.007, -1.000)
