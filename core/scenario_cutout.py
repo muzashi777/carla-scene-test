@@ -105,14 +105,16 @@ class CutOutScenario:
         v = speed_ms(self.lead)
 
         # ── Lane-cleared latch ─────────────────────────────────────────────────
-        # Latches True once the lead has moved far enough right to leave the ego
-        # lane (lateral ≥ CUTOUT_LANE_WIDTH + CUTOUT_CLEAR_MARGIN_M).  Also
+        # Latches True once the lead has moved far enough sideways to leave the ego
+        # lane (|lateral| ≥ CUTOUT_LANE_WIDTH + CUTOUT_CLEAR_MARGIN_M).  Also
         # latches when entering SETTLED since that phase implies the arc finished.
         # Once True it never resets: brief dips during STRAIGHTEN (P-controller
         # overshoot) cannot re-enable in-lane braking.
+        # abs() makes the check work for both right (CUTOUT_HEADING_DEG > 0) and
+        # left (CUTOUT_HEADING_DEG < 0) cut-outs without any config change.
         if not self._ever_cleared and self._phase != _CRUISE:
             _cm = getattr(self.cfg, "CUTOUT_CLEAR_MARGIN_M", 0.0)
-            if (self._lateral_offset() >= self.cfg.CUTOUT_LANE_WIDTH + _cm
+            if (abs(self._lateral_offset()) >= abs(self.cfg.CUTOUT_LANE_WIDTH) + _cm
                     or self._phase == _SETTLED):
                 self._ever_cleared = True
                 print(f"[CUTOUT] Lane cleared: lat={self._lateral_offset():.2f}m "
@@ -166,8 +168,10 @@ class CutOutScenario:
         # ── STEER phase ───────────────────────────────────────────────────────
         # Speed held via full P-controller (throttle + small brake on overspeed)
         # so the lead does not decelerate mid-turn and get rear-ended by the ego.
+        # abs() on both sides makes the transition work for left turns (negative
+        # CUTOUT_HEADING_DEG) as well as right turns (positive CUTOUT_HEADING_DEG).
         if self._phase == _STEER:
-            if self._lateral_offset() >= self.cfg.CUTOUT_LANE_WIDTH:
+            if abs(self._lateral_offset()) >= abs(self.cfg.CUTOUT_LANE_WIDTH):
                 self._phase = _STRAIGHTEN
                 # Fall through to _STRAIGHTEN below
             else:
