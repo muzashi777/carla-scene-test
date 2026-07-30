@@ -270,6 +270,28 @@ def cutin_is_conflict(case: dict, cfg) -> bool:
     )
 
 
+def cutout_train108_is_conflict(case: dict, cfg) -> bool:
+    """
+    Return True if this Cut-out (train108) matrix case is a conflict case.
+
+    Identical logic to cutout_is_conflict() — conflict is defined against the
+    STATIONARY revealed target (not the lead that cuts out).
+    'case' must contain 'ego_speed_kmh'.
+    Uses cfg.EGO_SPAWN, cfg.TARGET_SPAWN, cfg.GAP_OFFSET, cfg.MAX_TICKS, cfg.FIXED_DT
+    from config/scenario_cutout_train108.py.
+    """
+    return _kinematic_conflict_stationary_target(
+        ego_speed_kmh=case["ego_speed_kmh"],
+        ego_spawn_x=cfg.EGO_SPAWN["x"],
+        ego_spawn_y=cfg.EGO_SPAWN["y"],
+        target_spawn_x=cfg.TARGET_SPAWN["x"],
+        target_spawn_y=cfg.TARGET_SPAWN["y"],
+        gap_offset_m=cfg.GAP_OFFSET,
+        max_ticks=cfg.MAX_TICKS,
+        fixed_dt=cfg.FIXED_DT,
+    )
+
+
 def junction_cutin_is_conflict(case: dict, cfg) -> bool:
     """
     Return True if this Junction Cut-in matrix case is a conflict case.

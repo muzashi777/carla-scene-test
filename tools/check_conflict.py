@@ -19,14 +19,16 @@ import math
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import config.scenario_cutin          as cfg_c
-import config.scenario_lead_brake     as cfg_lb
-import config.scenario_ccrs           as cfg_ccrs
-import config.scenario_cutout         as cfg_co
-import config.scenario_junction_cutin as cfg_jc
+import config.scenario_cutin              as cfg_c
+import config.scenario_lead_brake         as cfg_lb
+import config.scenario_ccrs               as cfg_ccrs
+import config.scenario_cutout             as cfg_co
+import config.scenario_junction_cutin     as cfg_jc
+import config.scenario_cutout_train108    as cfg_co108
 from core.conflict import (cutin_is_conflict, lead_brake_is_conflict,
                             ccrs_is_conflict, cutout_is_conflict,
-                            junction_cutin_is_conflict)
+                            junction_cutin_is_conflict,
+                            cutout_train108_is_conflict)
 
 
 def check_cutin():
@@ -182,6 +184,46 @@ def check_cutout():
     return n_conflict, n_no, n_total
 
 
+def check_cutout_train108():
+    speeds         = cfg_co108.MATRIX["ego_speed_kmh"]
+    reveal_ttc_vals = cfg_co108.MATRIX["reveal_ttc"]
+    mu_vals        = cfg_co108.MATRIX["mu"]
+    n_total        = len(speeds) * len(reveal_ttc_vals) * len(mu_vals)
+
+    dist = math.hypot(cfg_co108.EGO_SPAWN["x"] - cfg_co108.TARGET_SPAWN["x"],
+                      cfg_co108.EGO_SPAWN["y"] - cfg_co108.TARGET_SPAWN["y"])
+    surface_gap = max(0.0, dist - cfg_co108.GAP_OFFSET)
+    max_time = cfg_co108.MAX_TICKS * cfg_co108.FIXED_DT
+
+    print("\n" + "=" * 72)
+    print("CUT-OUT train108 matrix conflict check  (train108, conflict = ego vs stationary target)")
+    print(f"  matrix: {len(speeds)} speeds × {len(reveal_ttc_vals)} reveal_ttc × {len(mu_vals)} μ "
+          f"= {n_total} cases")
+    print(f"  speeds (km/h): {speeds}")
+    print(f"  reveal_ttc (s): {reveal_ttc_vals}  [does not affect conflict formula]")
+    print(f"  ego→target dist = {dist:.1f} m  |  GAP_OFFSET = {cfg_co108.GAP_OFFSET} m  "
+          f"→ surface_gap ≈ {surface_gap:.1f} m")
+    print(f"  MAX_TIME = {max_time:.0f} s")
+    print()
+    print(f"  {'speed':>8} {'reveal_ttc':>11} {'mu':>6}  t_conflict    conflict?")
+    print(f"  {'-'*8} {'-'*11} {'-'*6}  {'-'*11}  ---------")
+
+    n_conflict = 0
+    for v, ttc, mu in itertools.product(speeds, reveal_ttc_vals, mu_vals):
+        case = {"ego_speed_kmh": v, "mu": mu}
+        flag = cutout_train108_is_conflict(case, cfg_co108)
+        if flag:
+            n_conflict += 1
+        v_ms = v / 3.6
+        t = surface_gap / v_ms if v_ms > 1e-3 else float("inf")
+        mark = "✓ conflict" if flag else "✗ no-conflict"
+        print(f"  {v:>5.0f} km/h  {ttc:>9.1f}s  {mu:>5.2f}  {t:>8.2f} s    {mark}")
+
+    n_no = n_total - n_conflict
+    print(f"\n  SUMMARY: {n_conflict}/{n_total} conflict,  {n_no}/{n_total} no-conflict")
+    return n_conflict, n_no, n_total
+
+
 def check_junction_cutin():
     speeds    = cfg_jc.MATRIX["ego_speed_kmh"]
     trig_vals = cfg_jc.MATRIX["trigger_d"]
@@ -226,24 +268,26 @@ def main():
     print("Kinematic conflict check — no simulation required.")
     print(f"LEAD_DECEL env: {os.environ.get('LEAD_DECEL', 'not set (using default 4.0)')}")
 
-    c_conf, c_no, c_tot     = check_cutin()
-    lb_conf, lb_no, lb_tot  = check_lead_brake()
-    cc_conf, cc_no, cc_tot  = check_ccrs()
-    co_conf, co_no, co_tot  = check_cutout()
-    jc_conf, jc_no, jc_tot  = check_junction_cutin()
+    c_conf, c_no, c_tot       = check_cutin()
+    lb_conf, lb_no, lb_tot    = check_lead_brake()
+    cc_conf, cc_no, cc_tot    = check_ccrs()
+    co_conf, co_no, co_tot    = check_cutout()
+    jc_conf, jc_no, jc_tot    = check_junction_cutin()
+    co108_conf, co108_no, co108_tot = check_cutout_train108()
 
-    grand_conf = c_conf + lb_conf + cc_conf + co_conf + jc_conf
-    grand_no   = c_no   + lb_no   + cc_no   + co_no   + jc_no
-    grand_tot  = c_tot  + lb_tot  + cc_tot  + co_tot  + jc_tot
+    grand_conf = c_conf + lb_conf + cc_conf + co_conf + jc_conf + co108_conf
+    grand_no   = c_no   + lb_no   + cc_no   + co_no   + jc_no   + co108_no
+    grand_tot  = c_tot  + lb_tot  + cc_tot  + co_tot  + jc_tot  + co108_tot
 
     print("\n" + "=" * 72)
     print("GRAND TOTAL")
-    print(f"  cut-in:          {c_conf}/{c_tot} conflict  ({c_no} no-conflict)")
-    print(f"  lead-brake:      {lb_conf}/{lb_tot} conflict  ({lb_no} no-conflict)")
-    print(f"  CCRs:            {cc_conf}/{cc_tot} conflict  ({cc_no} no-conflict)")
-    print(f"  cut-out:         {co_conf}/{co_tot} conflict  ({co_no} no-conflict)")
-    print(f"  junction cut-in: {jc_conf}/{jc_tot} conflict  ({jc_no} no-conflict)")
-    print(f"  TOTAL:           {grand_conf}/{grand_tot} conflict  ({grand_no} no-conflict)")
+    print(f"  cut-in:               {c_conf}/{c_tot} conflict  ({c_no} no-conflict)")
+    print(f"  lead-brake:           {lb_conf}/{lb_tot} conflict  ({lb_no} no-conflict)")
+    print(f"  CCRs:                 {cc_conf}/{cc_tot} conflict  ({cc_no} no-conflict)")
+    print(f"  cut-out (train000):   {co_conf}/{co_tot} conflict  ({co_no} no-conflict)")
+    print(f"  junction cut-in:      {jc_conf}/{jc_tot} conflict  ({jc_no} no-conflict)")
+    print(f"  cut-out (train108):   {co108_conf}/{co108_tot} conflict  ({co108_no} no-conflict)")
+    print(f"  TOTAL:                {grand_conf}/{grand_tot} conflict  ({grand_no} no-conflict)")
     if grand_no == 0:
         print("\n  All cases are conflict cases.")
         print("  Rc_conflict = Rc_all for these matrices.")

@@ -15,11 +15,14 @@ A simulation test harness for Automatic Emergency Braking (AEB) controllers, bui
 | **CCRs** | train000 | Ego drives toward a stationary target vehicle. Euro-NCAP CCRs style. | `run_single_ccrs.py` / `run_matrix_ccrs.py` |
 | **Cut-out** | train000 | A lead vehicle occludes a stationary target, then cuts out to the right revealing it. | `run_single_cutout.py` / `run_matrix_cutout.py` |
 | **Junction Cut-in** | train105 | An intruder emerges from a junction on the left, turns right into the ego lane using real steering, then brakes to a full stop — a stationary blocker forcing AEB engagement. | `run_single_junction_cutin.py` / `run_matrix_junction_cutin.py` |
+| **Cut-out (train108)** | train108 | Port of Cut-out to the train108 map. Identical behaviour: lead occludes stationary target, cuts out revealing it. Only map, spawn points, and z values differ. | `run_single_cutout_train108.py` / `run_matrix_cutout_train108.py` |
 
 All scenarios share the same session, actors, controllers, YOLO, metrics, and viz infrastructure.
 
 **Before running scene03_2 scenarios:** load the `scene03_2` map in CARLA.  
 **Before running train000 scenarios:** load the `train000` map in CARLA.  
+**Before running train105 scenarios:** load the `train105` map in CARLA.  
+**Before running train108 scenarios:** load the `train108` map in CARLA.  
 The scene-name check will raise a `RuntimeError` with a clear message if the wrong map is loaded.
 
 ---
@@ -33,13 +36,14 @@ config/
   scenario_ccrs.py         ★ All parameters for CCRs (train000; 5×5×2=50 cases/controller)
   scenario_cutout.py            ★ All parameters for cut-out (train000; 5×5×2=50 cases/controller)
   scenario_junction_cutin.py   ★ All parameters for junction cut-in (train105; 5×5×2=50 cases/ctrl)
+  scenario_cutout_train108.py  ★ All parameters for cut-out port on train108 (5×5×2=50 cases/ctrl)
 core/
   carla_session.py         Open/close sync mode, restore original settings
   actors.py                Spawn vehicles, set tire friction μ, attach sensors;
                            + set_spectator() / check_scene() helpers
   types.py                 Perception / EgoState dataclasses (controller input)
   metrics.py               RunRecord, 5 CPEIM indices, CSV writer, summarize()
-  conflict.py              ★ Kinematic is_conflict for all 4 scenarios (no CARLA needed)
+  conflict.py              ★ Kinematic is_conflict for all scenarios (no CARLA needed)
   report.py                ★ Read CSV → print CPEIM table (standalone, no CARLA)
   viz.py                   OpenCV overlay (run_single* only)
   scenario_cutin.py        Cut-in scene logic (ego cruise, dart trigger, blocking stop)
@@ -75,6 +79,8 @@ run_single_cutout.py            Cut-out: run 1 case with display  [train000]
 run_matrix_cutout.py            Cut-out: sweep full matrix → results/cutout_matrix_*.csv  [train000]
 run_single_junction_cutin.py    Junction cut-in: run 1 case with display  [train105]
 run_matrix_junction_cutin.py    Junction cut-in: sweep full matrix → results/junction_matrix_*.csv  [train105]
+run_single_cutout_train108.py   Cut-out (train108): run 1 case with display  [train108]
+run_matrix_cutout_train108.py   Cut-out (train108): sweep full matrix → results/cutout108_matrix_*.csv  [train108]
 run_perception_log.py      Run YOLO perception logging (background + actor passes)
 ```
 
@@ -94,8 +100,8 @@ run_perception_log.py      Run YOLO perception logging (background + actor passe
 ```bash
 python tools/check_conflict.py
 LEAD_DECEL=6.0 python tools/check_conflict.py   # verify with paper deceleration
-# Checks all 5 scenarios: cut-in (50), lead-brake (50), CCRs (50), cut-out (50),
-#                          junction cut-in (50) = 250 total
+# Checks all 6 scenarios: cut-in (50), lead-brake (50), CCRs (50), cut-out/train000 (50),
+#                          junction cut-in (50), cut-out/train108 (50) = 300 total
 ```
 
 **Scenario 1 — Cut-in / Dart-out (scene03_2):**
@@ -140,6 +146,18 @@ TEST_MODE=latency python run_matrix_junction_cutin.py
 MATRIX_VIZ=1 python run_matrix_junction_cutin.py  # enable display
 ```
 
+**Scenario 6 — Cut-out (train108 port):**
+```bash
+# Load train108 in CARLA first
+# Note: z values (EGO z=10.70, TARGET z=12.14, LEAD z=10.70) are fixed config constants —
+#       do NOT use cast_ray() or ground-projection (3DGS mesh returns unstable z).
+#       LEAD_SPAWN, CUTOUT_TRIGGER_TTC, and SPECTATOR_TF must be tuned in CARLA first.
+python run_single_cutout_train108.py               # debug single case with display
+python run_matrix_cutout_train108.py               # sweep 50 cases × 3 controllers → results/cutout108_matrix_*.csv
+TEST_MODE=latency python run_matrix_cutout_train108.py
+MATRIX_VIZ=1 python run_matrix_cutout_train108.py  # enable display
+```
+
 **Summarise results from existing CSVs (no CARLA needed):**
 ```bash
 python -m core.report results/matrix_*.csv
@@ -147,9 +165,10 @@ python -m core.report results/lead_matrix_*.csv
 python -m core.report results/ccrs_matrix_*.csv
 python -m core.report results/cutout_matrix_*.csv
 python -m core.report results/junction_matrix_*.csv
+python -m core.report results/cutout108_matrix_*.csv
 ```
 
-> Each scenario's results are independently prefixed: `matrix_` (cut-in), `lead_matrix_` (lead-brake), `ccrs_matrix_` (CCRs), `cutout_matrix_` (cut-out), `junction_matrix_` (junction cut-in).
+> Each scenario's results are independently prefixed: `matrix_` (cut-in), `lead_matrix_` (lead-brake), `ccrs_matrix_` (CCRs), `cutout_matrix_` (cut-out/train000), `junction_matrix_` (junction cut-in), `cutout108_matrix_` (cut-out/train108).
 
 ---
 

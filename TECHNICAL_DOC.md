@@ -2178,4 +2178,98 @@ grep -n "set_transform\|set_target_velocity" core/scenario_junction_cutin.py
 # → no matches (neither call is present; start() has no velocity boot)
 ```
 
-*Last updated: 2026-07-29.*
+*Last updated: 2026-07-30.*
+
+---
+
+### Rev 2026-07-30 — Cut-out scenario ported to train108 (`cutout_train108`)
+
+#### Summary
+
+The existing Cut-out scenario (train000) was ported to a new map, **train108**.  Behaviour is identical to the original — only the map, spawn coordinates, and z values differ.  No existing scenario files were modified.
+
+#### Reuse path chosen: config-swap (preferred)
+
+`core/scenario_cutout.py` and `core/runner_cutout.py` receive `cfg` as a function parameter — neither file imports the config at module load.  Config is imported only in the entry points (`run_single_cutout.py`, `run_matrix_cutout.py`).  Therefore the core files can be reused unchanged by creating new entry points that import the new config.
+
+**No** `core/scenario_cutout_train108.py` or `core/runner_cutout_train108.py` were created.
+
+#### New files
+
+| File | Role |
+|---|---|
+| `config/scenario_cutout_train108.py` | All train108 parameters — only `EXPECTED_SCENE`, `EGO_SPAWN`, `TARGET_SPAWN`, `LEAD_SPAWN` (z/yaw), `SPECTATOR_TF`, and `RESULTS_PREFIX` differ from `config/scenario_cutout.py` |
+| `run_single_cutout_train108.py` | Entry point: single case with display → reuses `core/runner_cutout.run_case()` |
+| `run_matrix_cutout_train108.py` | Entry point: matrix run → `results/cutout108_matrix_*.csv` |
+
+#### Modified files (additive only — no existing code paths changed)
+
+| File | Change |
+|---|---|
+| `core/conflict.py` | Added `cutout_train108_is_conflict()` at end of file (before `junction_cutin_is_conflict`) |
+| `tools/check_conflict.py` | Added `check_cutout_train108()` section; grand total 250 → 300 |
+| `README.md` | Added scenario row, run commands, map + fixed-z note, result prefix `cutout108_matrix` |
+| `TECHNICAL_DOC.md` | This entry |
+
+#### train108 coordinates
+
+| Actor | x | y | z | yaw |
+|---|---|---|---|---|
+| ego | 40.10 | −116.54 | **10.70** (fixed) | −90.39° |
+| target (stationary) | 39.65 | −198.00 | **12.14** (fixed) | −90.14° |
+| lead | derived at runtime from `EGO_SPAWN + headway_d × fwd_vec(yaw)` | | **10.70** [TO BE TUNED] | −90.39° |
+
+ego→target: Δy ≈ 81.5 m, Δx ≈ 0.45 m — parked car is straight ahead in the ego lane. ✓
+
+#### Conflict formula (train108)
+
+Reuses `_kinematic_conflict_stationary_target()` — same helper as CCRs, cut-out/train000, and junction cut-in:
+
+```
+dist         = hypot(40.10 − 39.65, −116.54 − (−198.00)) = hypot(0.45, 81.46) ≈ 81.46 m
+surface_gap  = 81.46 − 4.5 = 76.96 m
+t_conflict   = surface_gap / v_ego
+is_conflict  = t_conflict ≤ MAX_TICKS × FIXED_DT (20 s)
+```
+
+At 20 km/h (worst case): t_conflict ≈ 13.9 s < 20 s → all 50 cases are conflict cases. ✓
+
+#### Fixed z for train108
+
+`EGO_SPAWN z=10.70`, `TARGET_SPAWN z=12.14`, `LEAD_SPAWN z=10.70` — fixed config values used directly.  Ground on train108 sits at ≈10–12 m absolute z.  Same rationale as train000 (Rev 2026-07-22) and train105 (Rev 2026-07-29): `world.cast_ray()` is unreliable on 3DGS collision meshes; fixed z values from measurement are used throughout.
+
+#### Existing-behaviour guarantee
+
+- `core/scenario_cutout.py`, `core/runner_cutout.py` — **byte-for-byte unchanged** (config-swap reuse; no copy made).
+- All other existing scenario/config/runner files — **unchanged**.
+- `core/conflict.py` existing functions (`cutout_is_conflict`, etc.) — **unchanged**.
+- Shared controller parameters (`TTC_WARN_FULL`, `TTC_BRAKE_FULL`, `DYN_*`, `REQ_*_FRAC`, `PARTIAL_BRAKE`) — **identical values** in `config/scenario_cutout_train108.py`.
+- CSV columns: `CutOutRecord` dataclass is unchanged; new runs write to a separate prefix `cutout108_matrix_`.
+
+#### Values the user must tune in CARLA
+
+| Constant | Location | Notes |
+|---|---|---|
+| `LEAD_SPAWN["z"]` | `config/scenario_cutout_train108.py` | Default 10.70 (matches ego z); adjust if lead spawns inside the road surface |
+| `CUTOUT_TRIGGER_TTC` | `config/scenario_cutout_train108.py` | Default 1.9 s (same as train000); adjust so the target is revealed late enough to challenge AEB |
+| `SPECTATOR_TF` | `config/scenario_cutout_train108.py` | `None` until tuned; set to `dict(x=…, y=…, z=…, yaw=…)` |
+| `TARGET_SPAWN` (x, y, z) | `config/scenario_cutout_train108.py` | Confirm the parked car actually rests at (39.65, −198.00, 12.14) after first live run |
+| `CUTOUT_HEADING_DEG` | `config/scenario_cutout_train108.py` | Default 30.0° (right); negate to −30.0° if lead turns left in CARLA |
+
+#### How to verify (no CARLA)
+
+```bash
+# Conflict counts — expect cut-out train108 50/50, grand total 300/300
+python tools/check_conflict.py
+
+# Syntax check all new files
+python -m py_compile \
+  config/scenario_cutout_train108.py \
+  run_single_cutout_train108.py \
+  run_matrix_cutout_train108.py
+
+# Confirm lead uses physics steering (set_target_velocity only in start(), no set_transform)
+grep -n "set_transform\|set_target_velocity" core/scenario_cutout*.py
+# → core/scenario_cutout.py:95: set_target_velocity (in start() only) ✓
+# → no matches in scenario_cutout_train108.py (does not exist — config-swap reuse path)
+```
